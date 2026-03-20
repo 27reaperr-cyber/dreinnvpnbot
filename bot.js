@@ -814,7 +814,7 @@ async function handleMessage(message) {
 
   if (text === "/start" || text === "/menu") {
     await sendGifIfConfigured(chatId, "gif_main_menu");
-    await renderView(from.id, chatId, getUser(from.id)?.last_menu_message_id, "home");
+    await renderView(from.id, chatId, null, "home");
     return;
   }
 
