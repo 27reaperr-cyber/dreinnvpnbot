@@ -1,6 +1,9 @@
 ﻿require("dotenv").config();
 const path=require("path");
 const crypto=require("crypto");
+const fs=require("fs");
+const fsp=fs.promises;
+const { spawn }=require("child_process");
 const Database=require("better-sqlite3");
 
 const TOKEN=process.env.TELEGRAM_BOT_TOKEN||"";
@@ -43,6 +46,7 @@ CREATE TABLE IF NOT EXISTS referrals(id INTEGER PRIMARY KEY AUTOINCREMENT,referr
 CREATE TABLE IF NOT EXISTS gifts(id INTEGER PRIMARY KEY AUTOINCREMENT,from_tg_id INTEGER,to_tg_id INTEGER,tariff_code TEXT,tariff_title TEXT,amount_rub INTEGER,created_at INTEGER);
 CREATE TABLE IF NOT EXISTS purchases(id INTEGER PRIMARY KEY AUTOINCREMENT,tg_id INTEGER,tariff_code TEXT,tariff_title TEXT,amount_rub INTEGER,kind TEXT,created_at INTEGER);
 CREATE TABLE IF NOT EXISTS admin_states(admin_tg_id INTEGER PRIMARY KEY,state TEXT,payload TEXT,updated_at INTEGER);
+CREATE TABLE IF NOT EXISTS user_states(tg_id INTEGER PRIMARY KEY,state TEXT,payload TEXT,updated_at INTEGER);
 `);
 db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES('m1','1 месяц',30,100,1) ON CONFLICT(code) DO NOTHING").run();
 db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES('m6','6 месяцев',180,600,2) ON CONFLICT(code) DO NOTHING").run();
@@ -64,11 +68,17 @@ function setRef(uid,rid){const u=user(uid);if(!u||u.referred_by||Number(uid)===N
 function updateBalance(uid,delta){const u=user(uid);if(!u)throw new Error("NO_USER");const n=Number(u.balance_rub)+Number(delta);if(n<0)throw new Error("NO_MONEY");db.prepare("UPDATE users SET balance_rub=?,updated_at=? WHERE tg_id=?").run(n,now(),Number(uid));return n;}
 function usersPage(page,me,size=8){const p=Math.max(0,Number(page||0)),off=p*size;const items=db.prepare("SELECT tg_id,username,first_name FROM users WHERE tg_id!=? ORDER BY updated_at DESC LIMIT ? OFFSET ?").all(Number(me),size,off);const total=db.prepare("SELECT COUNT(*) c FROM users WHERE tg_id!=?").get(Number(me)).c;return{items,total:Number(total||0),page:p,size};}
 function addReferralReward(buyerId,amount){const b=user(buyerId);if(!b||!b.referred_by)return;const r=user(b.referred_by);if(!r)return;const pct=Math.max(0,Math.min(100,Number(setting("ref_percent","30"))||30));const reward=Math.floor((Number(amount)*pct)/100);if(reward<=0)return;updateBalance(r.tg_id,reward);db.prepare("UPDATE users SET ref_earned=ref_earned+?,updated_at=? WHERE tg_id=?").run(reward,now(),Number(r.tg_id));db.prepare("INSERT INTO referrals(referrer_tg_id,invited_tg_id,amount_rub,percent,reward_rub,created_at) VALUES(?,?,?,?,?,?)").run(Number(r.tg_id),Number(buyerId),Number(amount),pct,reward,now());}
+function setAdminState(id,state,payload=""){db.prepare("INSERT INTO admin_states(admin_tg_id,state,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(admin_tg_id) DO UPDATE SET state=excluded.state,payload=excluded.payload,updated_at=excluded.updated_at").run(Number(id),String(state),String(payload),now());}
+function getAdminState(id){return db.prepare("SELECT * FROM admin_states WHERE admin_tg_id=?").get(Number(id));}
+function clearAdminState(id){db.prepare("DELETE FROM admin_states WHERE admin_tg_id=?").run(Number(id));}
+function setUserState(id,state,payload=""){db.prepare("INSERT INTO user_states(tg_id,state,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(tg_id) DO UPDATE SET state=excluded.state,payload=excluded.payload,updated_at=excluded.updated_at").run(Number(id),String(state),String(payload),now());}
+function getUserState(id){return db.prepare("SELECT * FROM user_states WHERE tg_id=?").get(Number(id));}
+function clearUserState(id){db.prepare("DELETE FROM user_states WHERE tg_id=?").run(Number(id));}
 
 async function editOrSend(chatId,msgId,text,kb){try{if(msgId){await tg("editMessageText",{chat_id:chatId,message_id:msgId,text,parse_mode:"HTML",disable_web_page_preview:true,reply_markup:kb});return Number(msgId);}}catch(e){if(String(e.message).includes("message is not modified"))return Number(msgId);}const m=await tg("sendMessage",{chat_id:chatId,text,parse_mode:"HTML",disable_web_page_preview:true,reply_markup:kb});return Number(m.message_id);} 
 
 function homeText(u){return[`👋 Привет, <b>${esc(u.first_name||"друг")}</b>`,``,`— Ваш ID: <code>${u.tg_id}</code>`,`— Ваш баланс: <b>${rub(u.balance_rub)}</b>`,``,`📣 Новостной канал — ${esc(NEWS_URL)}`,`👤 Техническая поддержка — ${esc(SUPPORT_URL)}`].join("\n");}
-function homeKb(uid){const rows=[[{text:"🔐 Моя подписка",callback_data:"v:sub"}],[{text:"⭐ Купить подписку",callback_data:"v:buy"}],[{text:"💵 Мой баланс",callback_data:"v:bal"}],[{text:"🎁 Подарить подписку",callback_data:"v:gift"}],[{text:"🤝 Партнёрская программа",callback_data:"v:ref"}],[{text:"📘 Инструкции",callback_data:"v:guide"}],[{text:"✳️ Бесплатные прокси для TG",url:FREE_PROXY_URL}],[{text:"💬 О сервисе",callback_data:"v:about"}]];if(isAdmin(uid))rows.push([{text:"🛠 Админ панель",callback_data:"a:main"}]);return{inline_keyboard:rows};}
+function homeKb(uid){const rows=[[{text:"🔐 Моя подписка",callback_data:"v:sub"}],[{text:"⭐ Купить подписку",callback_data:"v:buy"}],[{text:"💵 Мой баланс",callback_data:"v:bal"}],[{text:"🎁 Подарить подписку",callback_data:"v:gift"}],[{text:"🤝 Партнёрская программа",callback_data:"v:ref"}],[{text:"📘 Инструкции",callback_data:"v:guide"}]];if(isAdmin(uid))rows.push([{text:"🛠 Админ панель",callback_data:"a:main"}]);return{inline_keyboard:rows};}
 function buyText(uid){const lines=["⭐ Тарифы",""];tariffs().forEach(t=>lines.push(`• ${t.title} — <b>${rub(t.price_rub)}</b>`));lines.push("",activeSub(sub(uid))?"У вас уже есть активная подписка. Можно только продлить.":"Выберите тариф для покупки.");return lines.join("\n");}
 function buyKb(uid){const act=activeSub(sub(uid));const rows=tariffs().map(t=>[{text:`${act?"⏳ Продлить":"🛍 Купить"} ${t.title} — ${rub(t.price_rub)}`,callback_data:`${act?"pay:r:":"pay:n:"}${t.code}`}]);rows.push([{text:"⬅️ Назад",callback_data:"v:home"}]);return{inline_keyboard:rows};}
 function subText(uid){const s=sub(uid);if(!activeSub(s))return["🔑 Информация о подписке","","Активная подписка не найдена.","Оформите тариф в разделе «Купить подписку»."].join("\n");const mins=Math.max(0,Math.floor((s.expires_at-now())/60000)),dd=Math.floor(mins/1440),hh=Math.floor((mins%1440)/60),mm=mins%60;return["🔑 Информация о подписке","",`Ссылка: ${esc(s.sub_url)}`,"",`⌛ Осталось: <b>${dd} дн. ${hh} ч. ${mm} мин.</b>`,`Истекает: <b>${d(s.expires_at)}</b>`,``,`📦 Тариф: <b>${esc(s.plan_title||s.plan_code||"—")}</b>`,`📱 Лимит устройств: <b>3</b>`,``,`Подключите устройство по кнопкам ниже 👇`].join("\n");}
@@ -77,6 +87,21 @@ function refText(u){const st=db.prepare("SELECT COUNT(*) c, COALESCE(SUM(reward_
 const refKb=()=>({inline_keyboard:[[{text:"💰 Вывести средства",callback_data:"ref:w"}],[{text:"🧾 Способ вывода",callback_data:"ref:p"}],[{text:"✉️ Пригласить друзей",callback_data:"ref:i"}],[{text:"🔄 Сменить код ссылки",callback_data:"ref:r"}],[{text:"⬅️ Назад",callback_data:"v:home"}]]});
 const back=()=>({inline_keyboard:[[{text:"⬅️ Назад",callback_data:"v:home"}]]});
 function giftUsersKb(sender,code,page){const{items,total,page:p,size}=usersPage(page,sender,8),max=Math.max(0,Math.ceil(total/size)-1);const rows=items.map(u=>[{text:`${u.first_name||u.username||u.tg_id} (${u.username?`@${u.username}`:`id:${u.tg_id}`})`,callback_data:`g:u:${code}:${u.tg_id}`}]);const nav=[];if(p>0)nav.push({text:"⬅️",callback_data:`g:l:${code}:${p-1}`});nav.push({text:`${p+1}/${max+1}`,callback_data:"noop"});if(p<max)nav.push({text:"➡️",callback_data:`g:l:${code}:${p+1}`});rows.push(nav,[{text:"⬅️ Назад",callback_data:"v:gift"}]);return{inline_keyboard:rows};}
+async function requestGiftRecipient(uid,chatId,code){
+  setUserState(uid,"gift_pick",code);
+  await tg("sendMessage",{
+    chat_id:chatId,
+    text:"Выберите пользователя в системном меню Telegram.",
+    reply_markup:{
+      keyboard:[
+        [{text:"Выбрать пользователя",request_user:{request_id:1,user_is_bot:false}}],
+        [{text:"Отмена выбора"}]
+      ],
+      resize_keyboard:true,
+      one_time_keyboard:true
+    }
+  });
+}
 
 async function render(uid,chatId,msgId,view,data={}){const u=user(uid);if(!u)return;let t=homeText(u),kb=homeKb(uid);
 if(view==="home"){t=homeText(u);kb=homeKb(uid);}else if(view==="buy"){t=buyText(uid);kb=buyKb(uid);}else if(view==="sub"){t=subText(uid);kb=subKb(uid);}else if(view==="bal"){t=`💵 Мой баланс\n\nТекущий баланс: <b>${rub(u.balance_rub)}</b>`;kb={inline_keyboard:[[{text:"⭐ Купить подписку",callback_data:"v:buy"}],[{text:"💳 Способы оплаты",callback_data:"v:pay"}],[{text:"⬅️ Назад",callback_data:"v:home"}]]};}
@@ -131,6 +156,16 @@ async function buySelf(uid,chatId,msgId,code,mode,cbid){
   }
 }
 
+async function askBuyConfirm(uid,chatId,msgId,code,mode,cbid){
+  const tr=tariff(code);
+  if(!tr){await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
+  const title=mode==="renew"?"подтверждение продления":"подтверждение покупки";
+  const text=[`🧾 ${title}`,"",`Тариф: <b>${esc(tr.title)}</b>`,`Стоимость: <b>${rub(tr.price_rub)}</b>`,"","Подтвердите оплату."].join("\n");
+  const kb={inline_keyboard:[[{text:"✅ Подтвердить",callback_data:`pay:c:${mode}:${code}`}],[{text:"⬅️ Отмена",callback_data:"v:buy"}]]};
+  const nm=await editOrSend(chatId,msgId,text,kb);setMenu(uid,chatId,nm);
+  await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Проверьте детали",show_alert:false});
+}
+
 async function giftToUser(fromId,toId,code,chatId,msgId,cbid){
   try{
     const res=await doPurchase(fromId,toId,code,"gift");
@@ -139,10 +174,11 @@ async function giftToUser(fromId,toId,code,chatId,msgId,cbid){
     const text=["🎁 Подарок отправлен","",`Получатель: <b>${esc(to?.first_name||to?.username||toId)}</b>`,`Тариф: <b>${esc(res.tr.title)}</b>`,`Списано: <b>${rub(res.tr.price_rub)}</b>`,`Ваш баланс: <b>${rub(me.balance_rub)}</b>`].join("\n");
     const nm=await editOrSend(chatId,msgId,text,{inline_keyboard:[[{text:"🎁 Новый подарок",callback_data:"v:gift"}],[{text:"👤 Личный кабинет",callback_data:"v:home"}]]});setMenu(fromId,chatId,nm);
     if(to)await tg("sendMessage",{chat_id:to.tg_id,text:`🎁 Вам подарили подписку ${res.tr.title}\nИстекает: ${d(res.exp)}\nСсылка: ${res.url}`});
-    await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Подарок отправлен",show_alert:false});
+    if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Подарок отправлен",show_alert:false});
   }catch(e){
     const msg=e.message==="NO_MONEY"?"Недостаточно средств.":e.message==="ACTIVE"?"У получателя уже активна подписка.":"Ошибка отправки подарка.";
-    await tg("answerCallbackQuery",{callback_query_id:cbid,text:msg,show_alert:true});
+    if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:msg,show_alert:true});
+    else await tg("sendMessage",{chat_id:chatId,text:msg});
   }
 }
 
@@ -189,8 +225,9 @@ async function handleCallback(q){
   if(data.startsWith("a:")&&!isAdmin(uid)){await tg("answerCallbackQuery",{callback_query_id:q.id,text:"Недостаточно прав",show_alert:true});return;}
 
   if(data.startsWith("v:")){const map={home:"home",sub:"sub",buy:"buy",bal:"bal",gift:"gift",ref:"ref",guide:"guide",about:"about",pay:"pay"};await render(uid,chatId,msgId,map[data.slice(2)]||"home");await tg("answerCallbackQuery",{callback_query_id:q.id});return;}
-  if(data.startsWith("pay:n:")){await buySelf(uid,chatId,msgId,data.split(":")[2],"new",q.id);return;}
-  if(data.startsWith("pay:r:")){await buySelf(uid,chatId,msgId,data.split(":")[2],"renew",q.id);return;}
+  if(data.startsWith("pay:n:")){await askBuyConfirm(uid,chatId,msgId,data.split(":")[2],"new",q.id);return;}
+  if(data.startsWith("pay:r:")){await askBuyConfirm(uid,chatId,msgId,data.split(":")[2],"renew",q.id);return;}
+  if(data.startsWith("pay:c:")){const[,,mode,code]=data.split(":");await buySelf(uid,chatId,msgId,code,mode,q.id);return;}
   if(data==="sub:del"){db.prepare("UPDATE subscriptions SET is_active=0,updated_at=? WHERE tg_id=?").run(now(),uid);await tg("answerCallbackQuery",{callback_query_id:q.id,text:"Подписка скрыта",show_alert:false});await render(uid,chatId,msgId,"sub");return;}
   if(data==="sub:reset"){await tg("answerCallbackQuery",{callback_query_id:q.id,text:"Сброс применится при новом импорте.",show_alert:true});return;}
   if(data==="sub:tv"){await tg("answerCallbackQuery",{callback_query_id:q.id,text:"Откройте ссылку подписки на TV и импортируйте в клиент.",show_alert:true});return;}
