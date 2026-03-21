@@ -1447,8 +1447,8 @@ async function render(uid, chatId, msgId, view, data={}) {
       break;
     }
     case "a_bcast":
-      text="<b>Рассылка</b>\n\nОтправьте текст. Поддерживается HTML-форматирование.\n<i>Задержка 35 мс/сообщение для соблюдения лимитов Telegram.</i>";
-      kb={inline_keyboard:[[{text:"✏️ Написать сообщение",callback_data:"a:bs"}],[{text:"« Назад",callback_data:"a:main"}]]};
+      text="<b>Рассылка</b>\n\nОтправьте любое сообщение: текст (с форматированием), фото, видео, GIF, документ или голосовое. Форматирование и медиа сохраняются автоматически.\n\n<i>Задержка 35 мс/сообщение для соблюдения лимитов Telegram.</i>";
+      kb={inline_keyboard:[[{text:"✏️ Создать рассылку",callback_data:"a:bs"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_pay":
       text=`<b>Текст «Других способов пополнения»</b>\n\n<blockquote>${esc(setting("payment_methods","Пока пусто."))}</blockquote>`;
@@ -1630,22 +1630,30 @@ async function handleAdminState(msg) {
 
     case "broadcast": {
       clearAdminState(aid);
-      const ids=db.prepare("SELECT tg_id FROM users").all();
-      let ok=0,fail=0;
-      const gifKey=setting("gif_broadcast","");
-      const progMsg=await tg("sendMessage",{chat_id:chatId,text:`📨 0/${ids.length}`}).catch(()=>null);
-      for(let i=0;i<ids.length;i++){
-        const uid=ids[i].tg_id;
-        try{
-          if(gifKey) await tg("sendAnimation",{chat_id:uid,animation:gifKey,caption:text,parse_mode:"HTML"});
-          else       await tg("sendMessage",{chat_id:uid,text,parse_mode:"HTML"});
-          ok++;
-        }catch{fail++;}
-        await sleep(35);
-        if(progMsg&&(i+1)%20===0) tg("editMessageText",{chat_id:chatId,message_id:progMsg.message_id,text:`📨 ${i+1}/${ids.length}`}).catch(()=>{});
-      }
-      await tg("sendMessage",{chat_id:chatId,text:`📨 Рассылка завершена\n✅ ${ok}  ❌ ${fail}`,parse_mode:"HTML"});
-      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_bcast"); return true;
+      // Store chat_id + message_id to use copyMessage later
+      const meta=JSON.stringify({chat_id:Number(chatId),message_id:Number(msg.message_id)});
+      setAdminState(aid,"broadcast_preview",meta);
+      const total=db.prepare("SELECT COUNT(*) c FROM users").get()?.c||0;
+      // Show preview with confirm/cancel
+      await tg("sendMessage",{chat_id:chatId,text:`👆 <b>Предпросмотр выше.</b>\n\nРазослать <b>${total}</b> пользователям?`,parse_mode:"HTML",reply_markup:{inline_keyboard:[
+        [{text:`📨 Разослать ${total} пользователям`,callback_data:"a:bs_confirm"}],
+        [{text:"✏️ Изменить",callback_data:"a:bs"}],
+        [{text:"❌ Отмена",callback_data:"a:bs_cancel"}],
+      ]}});
+      return true;
+    }
+    case "broadcast_preview": {
+      // Admin sent another message while preview is pending — treat it as new broadcast content
+      clearAdminState(aid);
+      const meta=JSON.stringify({chat_id:Number(chatId),message_id:Number(msg.message_id)});
+      setAdminState(aid,"broadcast_preview",meta);
+      const total=db.prepare("SELECT COUNT(*) c FROM users").get()?.c||0;
+      await tg("sendMessage",{chat_id:chatId,text:`👆 <b>Обновлён предпросмотр.</b>\n\nРазослать <b>${total}</b> пользователям?`,parse_mode:"HTML",reply_markup:{inline_keyboard:[
+        [{text:`📨 Разослать ${total} пользователям`,callback_data:"a:bs_confirm"}],
+        [{text:"✏️ Изменить",callback_data:"a:bs"}],
+        [{text:"❌ Отмена",callback_data:"a:bs_cancel"}],
+      ]}});
+      return true;
     }
     case "ref_percent": {
       const n=Number(text); if(!Number.isFinite(n)||n<0||n>100){await tg("sendMessage",{chat_id:chatId,text:"Введите 0..100."});return true;}
@@ -2051,7 +2059,38 @@ async function handleCallback(q) {
     await tg("sendMessage",{chat_id:chatId,text:`Ссылка «<b>${key.replace("url_","")}</b>»:\n<code>${esc(setting(key))}</code>\n\nВведите новый URL (или «-» для очистки):\n/cancel — отмена.`,parse_mode:"HTML"});
     await ans(); return;
   }
-  if(data==="a:bs"){setAdminState(uid,"broadcast","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст рассылки (HTML).\n/cancel — отмена."});await ans();return;}
+  if(data==="a:bs"){
+    setAdminState(uid,"broadcast","");
+    await tg("sendMessage",{chat_id:chatId,text:"📨 Отправьте сообщение для рассылки.\n\nПоддерживается: текст (с форматированием Telegram), фото, видео, GIF, документ, голосовое.\n\n/cancel — отмена."});
+    await ans(); return;
+  }
+  if(data==="a:bs_confirm"){
+    const row=getAdminState(uid);
+    if(!row||row.state!=="broadcast_preview"){await ans("Нет данных для рассылки.",true);return;}
+    clearAdminState(uid);
+    let msgMeta;
+    try{ msgMeta=JSON.parse(row.payload); }catch{ await ans("Ошибка данных.",true); return; }
+    await ans("⏳ Запускаю рассылку...");
+    const ids=db.prepare("SELECT tg_id FROM users").all();
+    let ok=0,fail=0;
+    const progMsg=await tg("sendMessage",{chat_id:chatId,text:`📨 0/${ids.length}`}).catch(()=>null);
+    for(let i=0;i<ids.length;i++){
+      const toId=ids[i].tg_id;
+      try{
+        await tg("copyMessage",{chat_id:toId,from_chat_id:msgMeta.chat_id,message_id:msgMeta.message_id});
+        ok++;
+      }catch{fail++;}
+      await sleep(35);
+      if(progMsg&&(i+1)%20===0) tg("editMessageText",{chat_id:chatId,message_id:progMsg.message_id,text:`📨 ${i+1}/${ids.length}`}).catch(()=>{});
+    }
+    await tg("sendMessage",{chat_id:chatId,text:`📨 Рассылка завершена\n✅ ${ok}  ❌ ${fail}`,parse_mode:"HTML"});
+    await render(uid,chatId,user(uid)?.last_menu_id||null,"a_bcast"); return;
+  }
+  if(data==="a:bs_cancel"){
+    clearAdminState(uid);
+    await ans("Отменено.");
+    await render(uid,chatId,msgId,"a_bcast"); return;
+  }
   if(data==="a:pe"){setAdminState(uid,"pay_methods","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст способов пополнения.\n/cancel — отмена."});await ans();return;}
   if(data==="a:guide_ru"){setAdminState(uid,"guide_text","");await tg("sendMessage",{chat_id:chatId,text:"🇷🇺 Отправьте текст инструкции на русском.\nФормат ссылок: [Название|URL]\n/cancel — отмена."});await ans();return;}
   if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await tg("sendMessage",{chat_id:chatId,text:"🇬🇧 Send the guide text in English.\nLink format: [Label|URL]\n/cancel — cancel."});await ans();return;}
