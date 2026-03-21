@@ -9,15 +9,21 @@ const Database  = require("better-sqlite3");
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
-const TOKEN        = process.env.TELEGRAM_BOT_TOKEN || "";
-const API          = (process.env.VPN_API_BASE_URL  || "").replace(/\/+$/, "");
-const APP_SECRET   = process.env.APP_SECRET         || "";
-const ADMIN_ID     = Number(process.env.ADMIN_TELEGRAM_ID || 0);
-const DB_FILE      = process.env.SQLITE_PATH        || path.join(__dirname, "bot.db");
-const NEWS_URL     = process.env.BOT_NEWS_URL       || "";
-const SUPPORT_URL  = process.env.BOT_SUPPORT_URL    || "";
-const FREE_PROXY   = process.env.BOT_FREE_PROXY_URL || "";
-const BOT_USERNAME = process.env.BOT_USERNAME       || "";
+const TOKEN            = process.env.TELEGRAM_BOT_TOKEN    || "";
+const API              = (process.env.VPN_API_BASE_URL     || "").replace(/\/+$/, "");
+const APP_SECRET       = process.env.APP_SECRET            || "";
+const ADMIN_ID         = Number(process.env.ADMIN_TELEGRAM_ID || 0);
+const DB_FILE          = process.env.SQLITE_PATH           || path.join(__dirname, "bot.db");
+const NEWS_URL         = process.env.BOT_NEWS_URL          || "";
+const SUPPORT_URL      = process.env.BOT_SUPPORT_URL       || "";
+const FREE_PROXY       = process.env.BOT_FREE_PROXY_URL    || "";
+const BOT_USERNAME     = process.env.BOT_USERNAME          || "";
+// CryptoBot
+const CRYPTOBOT_TOKEN  = process.env.CRYPTOBOT_TOKEN       || "";
+const CRYPTOBOT_API    = "https://pay.crypt.bot/api";
+const USDT_FALLBACK    = Number(process.env.CRYPTOBOT_FALLBACK_RATE || 90);
+const CRYPTO_MIN_RUB   = Number(process.env.CRYPTOBOT_MIN_RUB      || 50);   // минимум пополнения
+const CRYPTO_INVOICE_TTL = 3600; // секунд (1 час)
 
 if (!TOKEN || !API || !APP_SECRET || !ADMIN_ID) {
   console.error("Отсутствуют обязательные env: TELEGRAM_BOT_TOKEN, VPN_API_BASE_URL, APP_SECRET, ADMIN_TELEGRAM_ID");
@@ -141,6 +147,21 @@ function init() {
     );
     CREATE INDEX IF NOT EXISTS idx_wr_status ON withdrawal_requests(status);
     CREATE INDEX IF NOT EXISTS idx_wr_tg_id  ON withdrawal_requests(tg_id);
+    CREATE TABLE IF NOT EXISTS crypto_payments(
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_id       INTEGER NOT NULL,
+      amount_rub  INTEGER NOT NULL,
+      amount_usdt REAL    NOT NULL,
+      rate_rub    REAL    NOT NULL,
+      invoice_id  TEXT    NOT NULL,
+      pay_url     TEXT    NOT NULL DEFAULT '',
+      status      TEXT    NOT NULL DEFAULT 'pending',
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cp_tg_id      ON crypto_payments(tg_id);
+    CREATE INDEX IF NOT EXISTS idx_cp_invoice_id ON crypto_payments(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_cp_status     ON crypto_payments(status);
   `);
 
   // Migrations — idempotent
@@ -192,6 +213,93 @@ async function editOrSend(chatId, msgId, text, kb) {
   } catch(e){ if(String(e.message).includes("message is not modified")) return Number(msgId); }
   const m = await tg("sendMessage",{chat_id:chatId,text,parse_mode:"HTML",disable_web_page_preview:true,reply_markup:kb});
   return Number(m.message_id);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CryptoBot API
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Кеш курса — обновляем не чаще 1 раза в 5 минут
+let _rateCache = { val: USDT_FALLBACK, ts: 0 };
+
+async function getUsdtRate() {
+  if (Date.now() - _rateCache.ts < 5 * 60 * 1000) return _rateCache.val;
+  if (!CRYPTOBOT_TOKEN) return USDT_FALLBACK;
+  try {
+    const r = await fetch(CRYPTOBOT_API + "/getExchangeRates", {
+      headers: { "Crypto-Pay-API-Token": CRYPTOBOT_TOKEN },
+      signal: AbortSignal.timeout(8000),
+    });
+    const d = await r.json().catch(() => ({}));
+    const items = d.result || [];
+    for (const it of items) {
+      if ((it.source||"").toUpperCase()==="USDT" && (it.target||"").toUpperCase()==="RUB") {
+        const rate = parseFloat(it.rate);
+        if (rate > 1) { _rateCache = { val: rate, ts: Date.now() }; return rate; }
+      }
+    }
+    for (const it of items) {
+      if ((it.source||"").toUpperCase()==="RUB" && (it.target||"").toUpperCase()==="USDT") {
+        const rate = parseFloat(it.rate);
+        if (rate > 0) { const inv = Math.round(1/rate*100)/100; _rateCache = { val: inv, ts: Date.now() }; return inv; }
+      }
+    }
+  } catch(e) { console.warn("[CryptoBot] getRate:", e.message); }
+  return USDT_FALLBACK;
+}
+
+async function createCryptoInvoice(amountRub) {
+  if (!CRYPTOBOT_TOKEN) return null;
+  try {
+    const rate       = await getUsdtRate();
+    const amountUsdt = Math.max(0.01, Math.round(amountRub / rate * 100) / 100);
+    const r = await fetch(CRYPTOBOT_API + "/createInvoice", {
+      method : "POST",
+      headers: { "Crypto-Pay-API-Token": CRYPTOBOT_TOKEN, "Content-Type": "application/json" },
+      body   : JSON.stringify({
+        asset: "USDT", amount: String(amountUsdt),
+        description: "Пополнение баланса " + amountRub + " ₽",
+        expires_in: CRYPTO_INVOICE_TTL,
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (d.ok) {
+      const inv = d.result;
+      return { invoiceId: String(inv.invoice_id), payUrl: inv.pay_url, rate, amountUsdt };
+    }
+    console.error("[CryptoBot] createInvoice error:", JSON.stringify(d));
+  } catch(e) { console.error("[CryptoBot] createInvoice:", e.message); }
+  return null;
+}
+
+async function checkCryptoInvoice(invoiceId) {
+  if (!CRYPTOBOT_TOKEN) return false;
+  try {
+    const r = await fetch(CRYPTOBOT_API + "/getInvoices?invoice_ids=" + invoiceId, {
+      headers: { "Crypto-Pay-API-Token": CRYPTOBOT_TOKEN },
+      signal : AbortSignal.timeout(10000),
+    });
+    const d = await r.json().catch(() => ({}));
+    const items = (d.result||{}).items || [];
+    return items.length > 0 && items[0].status === "paid";
+  } catch(e) { console.error("[CryptoBot] checkInvoice:", e.message); }
+  return false;
+}
+
+// ── Crypto payments DB helpers ─────────────────
+function createCryptoPaymentRow(tgId, amountRub, amountUsdt, rateRub, invoiceId, payUrl) {
+  return db.prepare(
+    "INSERT INTO crypto_payments(tg_id,amount_rub,amount_usdt,rate_rub,invoice_id,pay_url,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)"
+  ).run(Number(tgId), Math.round(amountRub), amountUsdt, rateRub, invoiceId, payUrl, now(), now()).lastInsertRowid;
+}
+function getCryptoPayment(id)    { return db.prepare("SELECT * FROM crypto_payments WHERE id=?").get(Number(id)); }
+function markCryptoPaid(id)      { db.prepare("UPDATE crypto_payments SET status='paid',    updated_at=? WHERE id=?").run(now(), Number(id)); }
+function markCryptoCancelled(id) { db.prepare("UPDATE crypto_payments SET status='cancelled',updated_at=? WHERE id=?").run(now(), Number(id)); }
+function expireOldCryptoPayments(tgId) {
+  const cutoff = now() - CRYPTO_INVOICE_TTL * 1000;
+  db.prepare("UPDATE crypto_payments SET status='expired',updated_at=? WHERE tg_id=? AND status='pending' AND created_at<?").run(now(), Number(tgId), cutoff);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -380,8 +488,11 @@ function buyText(uid) {
   return lines.join("\n");
 }
 
-function balText(u) {
-  return ["💵 <b>Мой баланс</b>","",`Основной баланс: <b>${rub(u.balance_rub)}</b>`,"","Пополните баланс через «Способы оплаты»,","затем купите или продлите подписку."].join("\n");
+function balText(u, usdtRate) {
+  const lines = ["💵 <b>Мой баланс</b>","",`Основной баланс: <b>${rub(u.balance_rub)}</b>`,""];
+  if(usdtRate) lines.push(`💱 Курс USDT: <b>${usdtRate.toFixed(2)} ₽</b>`,"");
+  lines.push("Пополните баланс через «Способы оплаты»", "или мгновенно через <b>Crypto Bot</b> (USDT).");
+  return lines.join("\n");
 }
 
 function refText(u) {
@@ -466,7 +577,15 @@ function subKb(uid) {
   rows.push([{text:"❌ Скрыть",callback_data:"sub:del"},{text:"⬅️ Назад",callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
-function balKb() { return{inline_keyboard:[[{text:"💳 Способы оплаты",callback_data:"v:pay"}],[{text:"⭐ Купить подписку",callback_data:"v:buy"}],[{text:"🛒 История покупок",callback_data:"ph:0"}],[{text:"⬅️ Назад",callback_data:"v:home"}]]}; }
+function balKb(hasCrypto) {
+  const rows = [];
+  if(hasCrypto) rows.push([{text:"💎 Пополнить через Crypto Bot",callback_data:"topup:crypto"}]);
+  rows.push([{text:"💳 Способы оплаты",callback_data:"v:pay"}]);
+  rows.push([{text:"⭐ Купить подписку",callback_data:"v:buy"}]);
+  rows.push([{text:"🛒 История покупок",callback_data:"ph:0"}]);
+  rows.push([{text:"⬅️ Назад",callback_data:"v:home"}]);
+  return{inline_keyboard:rows};
+}
 function refKb(u) {
   const pending=!!userPendingWithdrawal(u.tg_id);
   return{inline_keyboard:[
@@ -513,6 +632,8 @@ function adminStatsText() {
   const revDay  = Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM purchases WHERE created_at>=?").get(todayTs).s||0);
   const refPaid = Number(db.prepare("SELECT COALESCE(SUM(reward_rub),0) s FROM referrals").get().s||0);
   const pending = pendingWithdrawals().length;
+  const cryptoTotal = Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM crypto_payments WHERE status='paid'").get().s||0);
+  const cryptoCount = Number(db.prepare("SELECT COUNT(*) c FROM crypto_payments WHERE status='paid'").get().c||0);
   return [
     "📊 <b>Статистика бота</b>","",
     `👥 Пользователей:    <b>${uCount}</b>  (+${newDay} сегодня)`,
@@ -521,6 +642,7 @@ function adminStatsText() {
     `💰 Общая выручка:    <b>${rub(revenue)}</b>`,
     `🤝 Выплачено реф.:   <b>${rub(refPaid)}</b>`,
     `⏳ Заявок на вывод:  <b>${pending}</b>`,
+    `💎 Crypto-платежей:  <b>${cryptoCount}</b>  (<b>${rub(cryptoTotal)}</b>)`,
   ].join("\n");
 }
 
@@ -563,6 +685,72 @@ function adminUserInfoText(tu) {
   ].join("\n");
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Crypto topup flows
+// ─────────────────────────────────────────────────────────────────────────────
+function cryptoEnterAmountText() {
+  return [
+    "💎 <b>Пополнение через Crypto Bot</b>","",
+    "Оплата происходит в USDT (TRC20).",
+    `Минимальная сумма: <b>${rub(CRYPTO_MIN_RUB)}</b>`,"",
+    "Введите сумму пополнения в рублях:",
+  ].join("\n");
+}
+function cryptoInvoiceText(amountRub, amountUsdt, rate) {
+  return [
+    "💎 <b>Счёт на оплату создан</b>","",
+    `💰 Сумма: <b>${rub(amountRub)}</b>`,
+    `₮  USDT:  <b>${amountUsdt} USDT</b>`,
+    `💱 Курс:  <b>${rate.toFixed(2)} ₽ / USDT</b>`,"",
+    "1️⃣ Нажмите «Оплатить» — откроется @CryptoBot",
+    "2️⃣ Переведите точную сумму USDT",
+    "3️⃣ Вернитесь и нажмите «✅ Проверить оплату»","",
+    "⏳ Счёт действителен 1 час.",
+  ].join("\n");
+}
+function cryptoInvoiceKb(payUrl, cpId) {
+  return {inline_keyboard:[
+    [{text:"💸 Оплатить",url:payUrl}],
+    [{text:"✅ Проверить оплату",callback_data:`cp:check:${cpId}`}],
+    [{text:"❌ Отменить",callback_data:`cp:cancel:${cpId}`}],
+  ]};
+}
+
+async function startCryptoTopup(uid, chatId) {
+  expireOldCryptoPayments(uid);
+  const rate = await getUsdtRate();
+  await tg("sendMessage",{
+    chat_id: chatId,
+    text: cryptoEnterAmountText() + `\n\n💱 Текущий курс: <b>${rate.toFixed(2)} ₽ / USDT</b>`,
+    parse_mode: "HTML",
+    reply_markup:{keyboard:[[{text:"Отмена"}]],resize_keyboard:true,one_time_keyboard:true},
+  });
+  setUserState(uid,"topup_crypto_amount","");
+}
+
+async function handleCryptoAmount(uid, chatId, text) {
+  const amount = Math.round(parseFloat(text.replace(/[^\d.]/g,""))||0);
+  if(!amount || amount < CRYPTO_MIN_RUB) {
+    await tg("sendMessage",{chat_id:chatId,text:`❌ Минимум: <b>${rub(CRYPTO_MIN_RUB)}</b>. Введите сумму ещё раз:`,parse_mode:"HTML"});
+    return;
+  }
+  clearUserState(uid);
+  await tg("sendMessage",{chat_id:chatId,text:"⏳ Создаю счёт...",reply_markup:{remove_keyboard:true}});
+  const inv = await createCryptoInvoice(amount);
+  if(!inv) {
+    await tg("sendMessage",{chat_id:chatId,text:"❌ CryptoBot недоступен. Попробуйте позже или воспользуйтесь другим способом оплаты."});
+    return;
+  }
+  const cpId = createCryptoPaymentRow(uid, amount, inv.amountUsdt, inv.rate, inv.invoiceId, inv.payUrl);
+  await tg("sendMessage",{
+    chat_id: chatId,
+    text: cryptoInvoiceText(amount, inv.amountUsdt, inv.rate),
+    parse_mode: "HTML",
+    reply_markup: cryptoInvoiceKb(inv.payUrl, cpId),
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Render
 // ─────────────────────────────────────────────────────────────────────────────
@@ -573,7 +761,7 @@ async function render(uid, chatId, msgId, view, data={}) {
     case "home":      t=homeText(u);  kb=homeKb(uid);  break;
     case "sub":       t=subText(uid); kb=subKb(uid);   break;
     case "buy":       t=buyText(uid); kb=buyKb(uid);   break;
-    case "bal":       t=balText(u);   kb=balKb();       break;
+    case "bal":       { const rate = data.rate||(CRYPTOBOT_TOKEN?await getUsdtRate():null); t=balText(u,rate); kb=balKb(!!CRYPTOBOT_TOKEN); break; }
     case "pay":       t=`💳 <b>Способы оплаты</b>\n\n${esc(setting("payment_methods","Пока не настроено.")).replace(/\\n/g,"\n")}`; kb=back("v:bal"); break;
     case "guide":     t=["📘 <b>Инструкция по подключению</b>","","1️⃣ Купите подписку.","2️⃣ Откройте «Моя подписка» → скопируйте ссылку.","3️⃣ Установите клиент (v2rayNG, Hiddify и др.).","4️⃣ Импортируйте ссылку в клиент.","5️⃣ Подключитесь — готово!"].join("\n"); kb=SUPPORT_URL?{inline_keyboard:[[{text:"💬 Поддержка",url:SUPPORT_URL}],[{text:"⬅️ Назад",callback_data:"v:home"}]]}:back(); break;
     case "about":     t="💬 <b>О сервисе</b>\n\nНадёжная VPN-подписка с быстрой выдачей ссылки, продлением через Telegram и реферальной программой."; kb=back(); break;
@@ -718,7 +906,9 @@ async function handleMessage(msg) {
   if((text==="Отмена"||text==="Отмена выбора")&&ustate){
     clearUserState(from.id);
     await tg("sendMessage",{chat_id:chatId,text:"Отменено.",reply_markup:{remove_keyboard:true}});
-    await render(from.id,chatId,user(from.id)?.last_menu_id||null,"home");
+    // Если отменяли ввод суммы crypto — показываем баланс
+    if(ustate.state==="topup_crypto_amount") await render(from.id,chatId,user(from.id)?.last_menu_id||null,"bal");
+    else await render(from.id,chatId,user(from.id)?.last_menu_id||null,"home");
     return;
   }
 
@@ -741,6 +931,12 @@ async function handleMessage(msg) {
     clearUserState(from.id);
     await tg("sendMessage",{chat_id:chatId,text:"✅ Реквизиты сохранены.",reply_markup:{remove_keyboard:true}});
     await render(from.id,chatId,user(from.id)?.last_menu_id||null,"ref"); return;
+  }
+
+  // Crypto topup: amount entry
+  if(ustate?.state==="topup_crypto_amount"){
+    if(!msg.text||msg.text.startsWith("/")) return;
+    await handleCryptoAmount(from.id, chatId, text); return;
   }
 
   // Withdrawal amount
@@ -822,6 +1018,50 @@ async function handleCallback(q) {
     const map={home:"home",sub:"sub",buy:"buy",bal:"bal",gift:"gift",ref:"ref",guide:"guide",about:"about",pay:"pay"};
     await render(uid,chatId,msgId,map[data.slice(2)]||"home"); await ans(); return;
   }
+  // Crypto topup nav
+  if(data==="topup:crypto"){
+    if(!CRYPTOBOT_TOKEN){await ans("CryptoBot не настроен. Используйте другой способ оплаты.",true);return;}
+    await ans();
+    await startCryptoTopup(uid,chatId);
+    return;
+  }
+  // Crypto check
+  if(data.startsWith("cp:check:")){
+    const cpId=Number(data.split(":")[2]);
+    const cp=getCryptoPayment(cpId);
+    if(!cp||cp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(cp.status==="paid"){await ans("✅ Уже зачислено!",true);return;}
+    if(cp.status==="cancelled"||cp.status==="expired"){await ans("Счёт отменён или истёк. Создайте новый.",true);return;}
+    await ans("⏳ Проверяю...");
+    const paid=await checkCryptoInvoice(cp.invoice_id);
+    if(paid){
+      markCryptoPaid(cpId);
+      updateBalance(uid, cp.amount_rub);
+      const me=user(uid);
+      await tg("editMessageText",{
+        chat_id:chatId,message_id:msgId,
+        text:["✅ <b>Оплата подтверждена!</b>","",`💰 Зачислено: <b>${rub(cp.amount_rub)}</b>`,`💵 Баланс: <b>${rub(me.balance_rub)}</b>`].join("\n"),
+        parse_mode:"HTML",
+        reply_markup:{inline_keyboard:[[{text:"⭐ Купить подписку",callback_data:"v:buy"},{text:"👤 Главная",callback_data:"v:home"}]]},
+      }).catch(()=>{});
+      tg("sendMessage",{chat_id:ADMIN_ID,text:[`💎 <b>Crypto пополнение</b>`,"",`👤 ${esc(me.first_name||me.username||String(uid))} (ID: <code>${uid}</code>)`,`💰 Сумма: <b>${rub(cp.amount_rub)}</b>`,`₮  USDT: <b>${cp.amount_usdt} USDT</b>`,`💱 Курс: <b>${Number(cp.rate_rub).toFixed(2)} ₽</b>`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
+    } else {
+      await tg("answerCallbackQuery",{callback_query_id:q.id,text:"❌ Оплата ещё не найдена. Подождите и попробуйте снова.",show_alert:true}).catch(()=>{});
+    }
+    return;
+  }
+  // Crypto cancel
+  if(data.startsWith("cp:cancel:")){
+    const cpId=Number(data.split(":")[2]);
+    const cp=getCryptoPayment(cpId);
+    if(!cp||cp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(cp.status!=="pending"){await ans("Счёт уже закрыт.",true);return;}
+    markCryptoCancelled(cpId);
+    await ans("Счёт отменён.");
+    await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:"❌ Счёт отменён. Вы можете создать новый через раздел «Мой баланс».",parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:"💵 Мой баланс",callback_data:"v:bal"}]]}}).catch(()=>{});
+    return;
+  }
+
   // Purchase
   if(data.startsWith("pay:n:")){await askBuyConfirm(uid,chatId,msgId,data.split(":")[2],"new",q.id);return;}
   if(data.startsWith("pay:r:")){await askBuyConfirm(uid,chatId,msgId,data.split(":")[2],"renew",q.id);return;}
