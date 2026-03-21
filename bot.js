@@ -138,6 +138,7 @@ const I18N = {
     buy_title:   "<b>Тарифы VPN</b>",
     buy_balance: (v) => `<blockquote>Ваш баланс: <b>${rub(v)}</b></blockquote>`,
     buy_active:  "<i>⚠️ Подписка уже активна. Купить новую можно после истечения.</i>",
+    buy_trial_active: "<i>✅ Пробный период активен. Купите тариф — дни прибавятся к текущему сроку.</i>",
     buy_new:     "<i>Выберите тариф для оформления.</i>",
     // Topup
     topup_title: "<b>Способы пополнения</b>",
@@ -293,6 +294,7 @@ const I18N = {
     buy_title:   "<b>VPN Plans</b>",
     buy_balance: (v) => `<blockquote>Your balance: <b>${rub(v)}</b></blockquote>`,
     buy_active:  "<i>⚠️ Subscription is active. You can buy a new one after it expires.</i>",
+    buy_trial_active: "<i>✅ Free trial is active. Buy a plan — days will be added to your current expiry.</i>",
     buy_new:     "<i>Choose a plan to subscribe.</i>",
     topup_title: "<b>Top up methods</b>",
     topup_other: (v) => v || "<i>Other methods not configured.</i>",
@@ -426,6 +428,7 @@ function T(uid)           { return I18N[getLang(uid)] || I18N.ru; }
 function user(id)     { return db.prepare("SELECT * FROM users WHERE tg_id=?").get(Number(id)); }
 function sub(id)      { return db.prepare("SELECT * FROM subscriptions WHERE tg_id=?").get(Number(id)); }
 function activeSub(s) { return !!(s && s.is_active===1 && s.expires_at>now() && s.sub_url); }
+function isTrialSub(uid) { const s=sub(uid); return activeSub(s) && s.plan_code==="trial"; }
 function tariffs()    { return db.prepare("SELECT * FROM tariffs ORDER BY sort_order").all(); }
 function tariff(c)    { return db.prepare("SELECT * FROM tariffs WHERE code=?").get(c); }
 
@@ -863,7 +866,9 @@ async function doPurchase(payerId, receiverId, code, kind) {
   const payer=user(payerId), receiver=user(receiverId), tr=tariff(code);
   if(!payer||!receiver||!tr) throw new Error("INVALID");
   const s=sub(receiverId), act=activeSub(s);
-  if(kind==="new"   && act)  throw new Error("ACTIVE");
+  const receiverHasTrial = act && s.plan_code==="trial";
+  // Block "new" purchase only if active subscription is a PAID plan (not trial)
+  if(kind==="new"   && act && !receiverHasTrial) throw new Error("ACTIVE");
   if(kind==="renew" && !act) throw new Error("NO_ACTIVE");
   if(kind==="gift"  && act)  throw new Error("ACTIVE");
   if(Number(payer.balance_rub)<Number(tr.price_rub)) throw new Error("NO_MONEY");
@@ -880,6 +885,9 @@ async function doPurchase(payerId, receiverId, code, kind) {
   } else if (kind==="gift") {
     const base = (s && s.expires_at > now()) ? s.expires_at : now();
     newExpiresAt = base + tr.duration_days * 86400000;
+  } else if (kind==="new" && receiverHasTrial) {
+    // Buying a paid plan while trial is still active → extend from trial expiry
+    newExpiresAt = s.expires_at + tr.duration_days * 86400000;
   } else {
     newExpiresAt = Number(api.subscription?.expiresAt || api.expiresAt || (now() + tr.duration_days*86400000));
   }
@@ -917,12 +925,19 @@ async function buySelf(uid, chatId, msgId, code, mode, cbid) {
 async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid) {
   const tr=tariff(code); if(!tr){await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
   const u=user(uid), tx=T(uid), lang=getLang(uid), diff=Number(u.balance_rub)-Number(tr.price_rub);
+  const trialActive=isTrialSub(uid);
+  const extendNote = trialActive
+    ? (lang==="en"
+        ? `<i>📌 Days add to your trial expiry: ${dt(sub(uid).expires_at + tr.duration_days*86400000)}</i>`
+        : `<i>📌 Дни прибавятся к пробному сроку: ${dt(sub(uid).expires_at + tr.duration_days*86400000)}</i>`)
+    : null;
   const lines=[
     tx.confirm_title(mode),"",
     tx.confirm_plan(tariffTitle(tr,lang)),
     tx.confirm_price(tr.price_rub),
     tx.confirm_bal(u.balance_rub),
     tx.confirm_after(Math.max(0,diff)),"",
+    ...(extendNote ? [extendNote,""] : []),
     diff<0?tx.confirm_low:tx.confirm_ok,
   ];
   const kb=diff<0
@@ -1033,14 +1048,17 @@ function subKb(uid) {
 }
 
 function buyKb(uid) {
-  const tx=T(uid);
-  // Always "new" purchase — renewal of active sub is blocked in doPurchase
-  const lang=getLang(uid);
-  const rows=tariffs().map(t=>[{text:`${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`pay:n:${t.code}`}]);
-  // Show trial button if enabled and user hasn't used it and has no active sub
-  if(trialEnabled()&&!hasUsedTrial(uid)&&!activeSub(sub(uid))){
+  const tx=T(uid), lang=getLang(uid);
+  const s=sub(uid), act=activeSub(s), trial=isTrialSub(uid);
+  const rows=[];
+  // Show tariff buttons if: no active sub, OR active sub is trial (allow upgrade)
+  if(!act||trial){
+    tariffs().forEach(t=>rows.push([{text:`${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`pay:n:${t.code}`}]));
+  }
+  // Show trial button only if enabled, not used, and no active sub at all
+  if(trialEnabled()&&!hasUsedTrial(uid)&&!act){
     const days=trialDays();
-    const label=getLang(uid)==="en"?`🎁 Free trial (${days} days)`:`🎁 Пробный период (${days} дней)`;
+    const label=lang==="en"?`🎁 Free trial (${days} days)`:`🎁 Пробный период (${days} дней)`;
     rows.unshift([{text:label,callback_data:"trial:start"}]);
   }
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
@@ -1144,10 +1162,14 @@ function tariffTitle(t, lang) {
 }
 
 function buyText(uid) {
-  const tx=T(uid), u=user(uid), act=activeSub(sub(uid)), lang=getLang(uid);
+  const tx=T(uid), u=user(uid), s=sub(uid), act=activeSub(s), trial=isTrialSub(uid), lang=getLang(uid);
   const lines=[tx.buy_title,""];
   tariffs().forEach(t=>lines.push(`${tariffTitle(t,lang)} — <b>${rub(t.price_rub)}</b>`));
-  lines.push("",tx.buy_balance(u.balance_rub),"",act?tx.buy_active:tx.buy_new);
+  let hint;
+  if(trial)     hint=tx.buy_trial_active;
+  else if(act)  hint=tx.buy_active;
+  else          hint=tx.buy_new;
+  lines.push("",tx.buy_balance(u.balance_rub),"",hint);
   return lines.join("\n");
 }
 
