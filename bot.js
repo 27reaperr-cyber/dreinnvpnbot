@@ -53,7 +53,10 @@ const I18N = {
     btn_sub:        "⭐ Моя подписка",
     btn_sub_active: "⭐ Открыть подписку",
     btn_hist:       "🗂 История",
-    btn_other:      "⚙️ Настройки",
+    btn_other:      "Остальное",
+    btn_other_topup:"💰 Пополнение",
+    btn_other_gift: "🎁 Подарить подписку",
+    btn_back_profile:"« Назад в профиль",
     btn_topup:      "💰 Способы пополнения",
     btn_buy_sub:    "💳 Купить подписку",
     btn_gift_send:  "🎁 Подарить",
@@ -193,7 +196,10 @@ const I18N = {
     btn_sub:        "⭐ My subscription",
     btn_sub_active: "⭐ Open subscription",
     btn_hist:       "🗂 History",
-    btn_other:      "⚙️ Settings",
+    btn_other:      "Other",
+    btn_other_topup:"💰 Top up",
+    btn_other_gift: "🎁 Gift subscription",
+    btn_back_profile:"« Back to profile",
     btn_topup:      "💰 Top up methods",
     btn_buy_sub:    "💳 Buy subscription",
     btn_gift_send:  "🎁 Gift",
@@ -334,13 +340,21 @@ function setSetting(k, v)    { db.prepare("INSERT INTO settings(key,value) VALUE
 function delSetting(k)       { db.prepare("DELETE FROM settings WHERE key=?").run(k); }
 
 // Configurable links (fallback to env / hardcoded defaults)
+// Normalize: @username → https://t.me/username, bare username → same
+function normalizeUrl(v) {
+  if(!v) return "";
+  v = String(v).trim();
+  if(v.startsWith("@")) return `https://t.me/${v.slice(1)}`;
+  if(!v.startsWith("http") && !v.startsWith("tg://")) return `https://t.me/${v}`;
+  return v;
+}
 const lnk = {
-  support : () => setting("url_support") || SUPPORT_URL,
-  privacy : () => setting("url_privacy") || "",
-  terms   : () => setting("url_terms")   || "",
-  proxy   : () => setting("url_proxy")   || FREE_PROXY,
-  news    : () => setting("url_news")    || NEWS_URL,
-  status  : () => setting("url_status")  || "https://dreinnvpn.vercel.app",
+  support : () => normalizeUrl(setting("url_support") || SUPPORT_URL),
+  privacy : () => normalizeUrl(setting("url_privacy") || ""),
+  terms   : () => normalizeUrl(setting("url_terms")   || ""),
+  proxy   : () => normalizeUrl(setting("url_proxy")   || FREE_PROXY),
+  news    : () => normalizeUrl(setting("url_news")    || NEWS_URL),
+  status  : () => normalizeUrl(setting("url_status")  || "https://dreinnvpn.vercel.app"),
 };
 
 // Per-section header images
@@ -826,9 +840,8 @@ function homeKb(uid) {
 function profileKb(uid) {
   const tx=T(uid), s=sub(uid), act=activeSub(s);
   const rows=[];
-  // "Blue" (URL) button when subscription is active — opens sub link directly
-  if(act) rows.push([{text:tx.btn_sub_active, url:s.sub_url}]);
-  else    rows.push([{text:tx.btn_sub,callback_data:"v:sub"}]);
+  // Always callback — shows subscription info inline
+  rows.push([{text:act?tx.btn_sub_active:tx.btn_sub, callback_data:"v:sub"}]);
   rows.push([{text:tx.btn_hist,callback_data:"ph:0"},{text:tx.btn_other,callback_data:"v:other"}]);
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
@@ -861,14 +874,28 @@ function topupKb(uid) {
 }
 
 function refKb(uid) {
-  const tx=T(uid), pending=!!userPendingWithdrawal(uid);
-  return{inline_keyboard:[
-    [pending?{text:tx.ref_pending||"⏳ Заявка в обработке",callback_data:"noop"}:{text:tx.btn_withdraw,callback_data:"ref:w"}],
-    [{text:tx.btn_ref_hist,callback_data:"ref:hist:0"}],
-    [{text:tx.btn_payout_set,callback_data:"ref:p"},{text:tx.btn_ref_code,callback_data:"ref:r"}],
-    [{text:tx.btn_invite,callback_data:"ref:i"}],
-    [{text:tx.btn_home,callback_data:"v:home"}],
-  ]};
+  const tx=T(uid), u=user(uid);
+  const pending=!!userPendingWithdrawal(uid);
+  const refBal=Number(u.ref_balance_rub||0);
+  const min=Number(setting("ref_withdraw_min","500"))||500;
+  const link=refLink(u.ref_code);
+  const rows=[];
+  // Primary: invite link as external URL button (shows ↗ icon in Telegram)
+  rows.push([{text:tx.btn_invite, url:link}]);
+  // Show withdraw if has balance
+  if(refBal>=min){
+    rows.push([pending
+      ?{text:"⏳ Заявка в обработке",callback_data:"noop"}
+      :{text:tx.btn_withdraw,callback_data:"ref:w"}
+    ]);
+  }
+  // Secondary row: history + settings
+  rows.push([
+    {text:tx.btn_ref_hist,callback_data:"ref:hist:0"},
+    {text:tx.btn_payout_set,callback_data:"ref:p"},
+  ]);
+  rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
+  return{inline_keyboard:rows};
 }
 
 function payoutMethodKb(uid) {
@@ -964,16 +991,31 @@ function topupText(uid) {
 }
 
 function refText(uid) {
-  const tx=T(uid), u=user(uid);
+  const tx=T(uid), u=user(uid), isRu=getLang(uid)==="ru";
   const st=db.prepare("SELECT COUNT(*) c, COALESCE(SUM(reward_rub),0) s FROM referrals WHERE referrer_tg_id=?").get(Number(uid));
-  const pct=Number(setting("ref_percent","30"))||30, min=Number(setting("ref_withdraw_min","500"))||500;
-  const refBal=Number(u.ref_balance_rub||0), pending=userPendingWithdrawal(uid);
-  return [
-    tx.ref_title,"",tx.ref_desc(pct),"",
-    tx.ref_invited(st.c||0),tx.ref_earned(st.s||0),
-    `<blockquote>${tx.ref_balance(refBal)}\n${tx.ref_min(min)}\n${tx.ref_method(u.payout_method)}\n${pending?tx.ref_pending:"—"}</blockquote>`,"",
-    `${tx.ref_link_hdr}\n<code>${refLink(u.ref_code)}</code>`,
-  ].join("\n");
+  const pct=Number(setting("ref_percent","30"))||30;
+  const refBal=Number(u.ref_balance_rub||0);
+  const link=refLink(u.ref_code);
+  const lines=[
+    tx.ref_title,"",
+    // ref link in blockquote with copy hint
+    `<blockquote>${link}</blockquote>`,
+    isRu?"<i>(Нажмите, чтобы скопировать)</i>":"<i>(Tap to copy)</i>","",
+    // stats
+    tx.ref_invited(st.c||0),
+    `${isRu?"Заработано":"Earned"}: <b>${Number(st.s||0).toFixed(2)}₽</b>`,"",
+    // promo block
+    isRu?[
+      "⭐ <b>Это выгодно!</b>",
+      `<i>${pct}% от каждой покупки подписки</i>`,
+      `<i>Реф. баланс: <b>${refBal.toFixed(2)}₽</b></i>`,
+    ].join("\n"):[
+      "⭐ <b>Great deal!</b>",
+      `<i>${pct}% from every subscription purchase</i>`,
+      `<i>Ref balance: <b>${refBal.toFixed(2)}₽</b></i>`,
+    ].join("\n"),
+  ];
+  return lines.join("\n");
 }
 
 function aboutText(uid) {
@@ -982,10 +1024,13 @@ function aboutText(uid) {
 }
 
 function otherText(uid) {
-  const tx=T(uid), proxy=lnk.proxy();
-  const lines=[tx.other_title,""];
-  if(proxy) lines.push(`<a href="${proxy}">${tx.other_proxy}</a>`);
-  else      lines.push(`<i>${getLang(uid)==="en"?"Proxy link not configured.":"Ссылка на прокси не настроена."}</i>`);
+  const isRu=getLang(uid)==="ru", proxy=lnk.proxy();
+  const title=isRu?"<b>Остальное</b>":"<b>Other</b>";
+  const lines=[title,""];
+  if(proxy) lines.push(isRu?
+    `<a href="${proxy}">🆓 Бесплатные прокси для Telegram</a>`:
+    `<a href="${proxy}">🆓 Free Telegram proxies</a>`
+  );
   return lines.join("\n");
 }
 
@@ -1156,7 +1201,13 @@ async function render(uid, chatId, msgId, view, data={}) {
       break;
     }
     case "other":
-      text=otherText(uid); kb={inline_keyboard:[[{text:tx.btn_home,callback_data:"v:home"}]]}; photo="";
+      text=otherText(uid);
+      kb={inline_keyboard:[
+        [{text:tx.btn_other_topup,callback_data:"v:topup"}],
+        [{text:tx.btn_other_gift,callback_data:"v:gift"}],
+        [{text:tx.btn_back_profile,callback_data:"v:profile"}],
+      ]};
+      photo="";
       break;
     case "lang":
       text=[tx.lang_title,"",`${tx.lang_current}: <b>${getLang(uid)==="ru"?tx.lang_ru:tx.lang_en}</b>`].join("\n");
