@@ -42,6 +42,7 @@ const isAdmin = (id) => Number(id) === ADMIN_ID;
 const refLink = (code) => BOT_USERNAME
   ? `https://t.me/${BOT_USERNAME}?start=partner_${code}`
   : `https://t.me/?start=partner_${code}`;
+const sleep   = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings
@@ -143,7 +144,10 @@ function init() {
   `);
 
   // Migrations — idempotent
-  for (const m of ["ALTER TABLE users ADD COLUMN ref_balance_rub INTEGER NOT NULL DEFAULT 0"]) {
+  for (const m of [
+    "ALTER TABLE users ADD COLUMN ref_balance_rub INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN ref_earned INTEGER NOT NULL DEFAULT 0",
+  ]) {
     try { db.exec(m); } catch {}
   }
 
@@ -166,7 +170,6 @@ async function tg(method, params) {
   return j.result;
 }
 
-// FIX: send local file via multipart/form-data (JSON.stringify can't handle file streams)
 async function tgSendFile(method, chatId, fieldName, filePath, extra={}) {
   const buf  = await fsp.readFile(filePath);
   const form = new FormData();
@@ -191,26 +194,53 @@ async function editOrSend(chatId, msgId, text, kb) {
   return Number(m.message_id);
 }
 
-function restartBot() {
-  try{db.close();}catch{}
-  const child=spawn(process.execPath,[path.join(__dirname,"bot.js")],{cwd:__dirname,detached:true,stdio:"ignore",env:process.env});
-  child.unref(); process.exit(0);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// DB Import / Export / Restart
+// ─────────────────────────────────────────────────────────────────────────────
 
-async function exportDbToAdmin(chatId) {
-  await tgSendFile("sendDocument", chatId, "document", DB_FILE, {caption:"📦 База данных бота"});
-}
-
-async function importDbFromDocument(fileId) {
+/** Validates + downloads SQLite file to a temp path. Does NOT touch the main DB. */
+async function downloadImportFile(fileId) {
   const f = await tg("getFile",{file_id:fileId});
   if(!f?.file_path) throw new Error("file_path not found");
   const resp = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${f.file_path}`);
-  if(!resp.ok) throw new Error(`Скачивание: HTTP ${resp.status}`);
-  const tmp = `${DB_FILE}.import.tmp`;
-  await fsp.writeFile(tmp, Buffer.from(await resp.arrayBuffer()));
-  try{db.close();}catch{}
-  await fsp.copyFile(DB_FILE,`${DB_FILE}.backup.${Date.now()}`);
-  await fsp.rename(tmp, DB_FILE);
+  if(!resp.ok) throw new Error(`Ошибка скачивания: HTTP ${resp.status}`);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  // Validate SQLite magic bytes: first 16 bytes = "SQLite format 3\000"
+  const MAGIC = "SQLite format 3\x00";
+  if(buf.length < 100 || buf.slice(0,16).toString("binary") !== MAGIC) {
+    throw new Error("Файл не является базой данных SQLite");
+  }
+  const tmp = `${DB_FILE}.import_${Date.now()}.tmp`;
+  await fsp.writeFile(tmp, buf);
+  return tmp;
+}
+
+/** Flushes WAL and restarts the process, swapping in the imported DB file. */
+function restartBotWithFile(tmpPath) {
+  // Checkpoint WAL so main DB file is fully up-to-date before backup
+  try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+  try { db.close(); } catch {}
+  // Backup current DB, then swap in imported file — synchronously since we're about to exit
+  try { fs.copyFileSync(DB_FILE, `${DB_FILE}.backup.${Date.now()}`); } catch {}
+  try { fs.renameSync(tmpPath, DB_FILE); } catch(e) { console.error("rename failed:", e.message); }
+  const child = spawn(process.execPath,[path.join(__dirname,"bot.js")],{cwd:__dirname,detached:true,stdio:"ignore",env:process.env});
+  child.unref();
+  process.exit(0);
+}
+
+/** Normal restart (no import). */
+function restartBot() {
+  try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+  try { db.close(); } catch {}
+  const child = spawn(process.execPath,[path.join(__dirname,"bot.js")],{cwd:__dirname,detached:true,stdio:"ignore",env:process.env});
+  child.unref();
+  process.exit(0);
+}
+
+/** Exports DB to admin — checkpoints WAL first so file contains latest data. */
+async function exportDbToAdmin(chatId) {
+  try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+  await tgSendFile("sendDocument", chatId, "document", DB_FILE, {caption:"📦 База данных бота"});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,19 +276,24 @@ async function doPurchase(payerId, receiverId, code, kind) {
   const payer=user(payerId),receiver=user(receiverId),tr=tariff(code);
   if(!payer||!receiver||!tr) throw new Error("INVALID");
   const s=sub(receiverId), act=activeSub(s);
-  if(kind==="new"  &&act)  throw new Error("ACTIVE");
-  if(kind==="renew"&&!act) throw new Error("NO_ACTIVE");
+  // Block "new" if already active, block "renew" if not active
+  // Gifts are allowed regardless of receiver's current status
+  if(kind==="new"  && act)  throw new Error("ACTIVE");
+  if(kind==="renew"&& !act) throw new Error("NO_ACTIVE");
   if(Number(payer.balance_rub)<Number(tr.price_rub)) throw new Error("NO_MONEY");
   const api = await createSubViaApi(receiver,tr,kind==="gift");
+  const subUrl = api.subscriptionUrl || api.sub_url || "";
+  const expiresAt = Number(api.subscription?.expiresAt || api.expiresAt || (now() + tr.duration_days*86400000));
+  if(!subUrl) throw new Error("API не вернул ссылку подписки");
   db.transaction(()=>{
     updateBalance(payerId,-Number(tr.price_rub));
     if(payerId===receiverId) addReferralReward(receiverId,tr.price_rub);
     db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,updated_at=excluded.updated_at")
-      .run(Number(receiverId),tr.code,tr.title,api.subscriptionUrl,Number(api.subscription?.expiresAt||0),now(),now());
+      .run(Number(receiverId),tr.code,tr.title,subUrl,expiresAt,now(),now());
     db.prepare("INSERT INTO purchases(tg_id,tariff_code,tariff_title,amount_rub,kind,created_at) VALUES(?,?,?,?,?,?)").run(Number(payerId),tr.code,tr.title,Number(tr.price_rub),kind,now());
     if(kind==="gift") db.prepare("INSERT INTO gifts(from_tg_id,to_tg_id,tariff_code,tariff_title,amount_rub,created_at) VALUES(?,?,?,?,?,?)").run(Number(payerId),Number(receiverId),tr.code,tr.title,Number(tr.price_rub),now());
   })();
-  return {tr, url:api.subscriptionUrl, exp:Number(api.subscription?.expiresAt||0)};
+  return {tr, url:subUrl, exp:expiresAt};
 }
 
 async function buySelf(uid, chatId, msgId, code, mode, cbid) {
@@ -271,7 +306,8 @@ async function buySelf(uid, chatId, msgId, code, mode, cbid) {
     const nm=await editOrSend(chatId,msgId,text,kb); setMenu(uid,chatId,nm);
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Готово ✅"});
   } catch(e) {
-    const msg=e.message==="ACTIVE"?"Подписка уже активна. Выберите «Продлить».":e.message==="NO_ACTIVE"?"Нет активной подписки для продления.":e.message==="NO_MONEY"?"Недостаточно средств на балансе.":"Ошибка при оплате. Попробуйте позже.";
+    const map={ACTIVE:"Подписка уже активна. Выберите «Продлить».",NO_ACTIVE:"Нет активной подписки для продления.",NO_MONEY:"Недостаточно средств на балансе."};
+    const msg=map[e.message]||`Ошибка при оплате: ${e.message}`;
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:msg,show_alert:true});
     if(e.message==="NO_MONEY") await render(uid,chatId,msgId,"bal");
   }
@@ -289,6 +325,10 @@ async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid) {
 
 async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
   try {
+    if(Number(fromId)===Number(toId)){
+      if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Нельзя подарить самому себе.",show_alert:true});
+      return;
+    }
     const res=await doPurchase(fromId,toId,code,"gift");
     await gif(chatId,"gif_gift_success");
     const to=user(toId), me=user(fromId);
@@ -298,10 +338,11 @@ async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
     if(to) tg("sendMessage",{chat_id:to.tg_id,text:`🎁 <b>Вам подарили подписку!</b>\n\n📦 Тариф: <b>${esc(res.tr.title)}</b>\n📅 Истекает: <b>${dt(res.exp)}</b>\n\n🔗 <code>${esc(res.url)}</code>`,parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:"📲 Установить",url:res.url}]]}}).catch(()=>{});
     if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Подарок отправлен 🎁"});
   } catch(e) {
-    const msg=e.message==="NO_MONEY"?"Недостаточно средств на балансе.":e.message==="ACTIVE"?"У получателя уже активна подписка.":"Ошибка отправки. Попробуйте позже.";
+    const map={NO_MONEY:"Недостаточно средств на балансе.",ACTIVE:"У получателя уже активна подписка."};
+    const msg=map[e.message]||`Ошибка: ${e.message}`;
     if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:msg,show_alert:true});
     else tg("sendMessage",{chat_id:chatId,text:`❌ ${msg}`,parse_mode:"HTML"}).catch(()=>{});
-    await render(fromId,chatId,msgId||null,"home");
+    if(msgId) await render(fromId,chatId,msgId,"home");
   }
 }
 
@@ -464,13 +505,23 @@ function pagingKb(prefix, page, total, size, backTarget) {
 // ─────────────────────────────────────────────────────────────────────────────
 function adminStatsText() {
   const uCount  = Number(db.prepare("SELECT COUNT(*) c FROM users").get().c);
-  const aCount  = Number(db.prepare("SELECT COUNT(*) c FROM subscriptions WHERE is_active=1").get().c);
+  const aCount  = Number(db.prepare("SELECT COUNT(*) c FROM subscriptions WHERE is_active=1 AND expires_at>?").get(now()).c);
   const revenue = Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM purchases").get().s||0);
   const today   = new Date(); today.setHours(0,0,0,0);
-  const newDay  = Number(db.prepare("SELECT COUNT(*) c FROM users WHERE created_at>=?").get(today.getTime()).c);
+  const todayTs = today.getTime();
+  const newDay  = Number(db.prepare("SELECT COUNT(*) c FROM users WHERE created_at>=?").get(todayTs).c);
+  const revDay  = Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM purchases WHERE created_at>=?").get(todayTs).s||0);
   const refPaid = Number(db.prepare("SELECT COALESCE(SUM(reward_rub),0) s FROM referrals").get().s||0);
   const pending = pendingWithdrawals().length;
-  return ["📊 <b>Статистика бота</b>","",`👥 Пользователей:    <b>${uCount}</b>  (+${newDay} сегодня)`,`🔐 Активных подп.:   <b>${aCount}</b>`,`💰 Общая выручка:    <b>${rub(revenue)}</b>`,`🤝 Выплачено реф.:   <b>${rub(refPaid)}</b>`,`⏳ Заявок на вывод:  <b>${pending}</b>`].join("\n");
+  return [
+    "📊 <b>Статистика бота</b>","",
+    `👥 Пользователей:    <b>${uCount}</b>  (+${newDay} сегодня)`,
+    `🔐 Активных подп.:   <b>${aCount}</b>`,
+    `💰 Выручка за день:  <b>${rub(revDay)}</b>`,
+    `💰 Общая выручка:    <b>${rub(revenue)}</b>`,
+    `🤝 Выплачено реф.:   <b>${rub(refPaid)}</b>`,
+    `⏳ Заявок на вывод:  <b>${pending}</b>`,
+  ].join("\n");
 }
 
 function withdrawalPanelView() {
@@ -497,7 +548,19 @@ function withdrawalHistoryText() {
 
 function adminUserInfoText(tu) {
   const ts=sub(tu.tg_id), hasSub=activeSub(ts);
-  return ["👤 <b>Пользователь</b>","",`ID:              <code>${tu.tg_id}</code>`,`Имя:             ${esc(tu.first_name)}`,`Username:        ${tu.username?`@${esc(tu.username)}`:"—"}`,`Баланс:          <b>${rub(tu.balance_rub)}</b>`,`Реф. баланс:     <b>${rub(tu.ref_balance_rub||0)}</b>`,`Реф. заработано: <b>${rub(tu.ref_earned||0)}</b>`,`Подписка:        ${hasSub?`✅ до ${dt(ts.expires_at)}`:"❌ нет"}`,`Зарегистрирован: ${dt(tu.created_at)}`].join("\n");
+  const pCount=Number(db.prepare("SELECT COUNT(*) c FROM purchases WHERE tg_id=?").get(tu.tg_id).c||0);
+  return [
+    "👤 <b>Пользователь</b>","",
+    `ID:              <code>${tu.tg_id}</code>`,
+    `Имя:             ${esc(tu.first_name)}`,
+    `Username:        ${tu.username?`@${esc(tu.username)}`:"—"}`,
+    `Баланс:          <b>${rub(tu.balance_rub)}</b>`,
+    `Реф. баланс:     <b>${rub(tu.ref_balance_rub||0)}</b>`,
+    `Реф. заработано: <b>${rub(tu.ref_earned||0)}</b>`,
+    `Покупок:         <b>${pCount}</b>`,
+    `Подписка:        ${hasSub?`✅ до ${dt(ts.expires_at)}`:"❌ нет"}`,
+    `Зарегистрирован: ${dt(tu.created_at)}`,
+  ].join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -525,10 +588,10 @@ async function render(uid, chatId, msgId, view, data={}) {
     case "a_wr_hist": t=withdrawalHistoryText(); kb=back("a:wr"); break;
     case "a_tariffs": t=`💸 <b>Цены тарифов</b>\n\n${tariffs().map(x=>`• ${x.title}: <b>${rub(x.price_rub)}</b>`).join("\n")}`; kb={inline_keyboard:[...tariffs().map(x=>[{text:`✏️ ${x.title} — ${rub(x.price_rub)}`,callback_data:`a:te:${x.code}`}]),[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
     case "a_gif":     t="🎞 <b>GIF-анимации</b>\n\nНастройте анимации для каждого события:"; kb={inline_keyboard:[[{text:`🏠 Главное меню${setting("gif_main_menu")?" ✅":""}`,callback_data:"a:ge:gif_main_menu"}],[{text:`✅ Покупка${setting("gif_purchase_success")?" ✅":""}`,callback_data:"a:ge:gif_purchase_success"}],[{text:`🎁 Подарок${setting("gif_gift_success")?" ✅":""}`,callback_data:"a:ge:gif_gift_success"}],[{text:`📨 Рассылка${setting("gif_broadcast")?" ✅":""}`,callback_data:"a:ge:gif_broadcast"}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
-    case "a_bcast":   t="📨 <b>Рассылка</b>\n\nОтправьте текст. Поддерживается HTML."; kb={inline_keyboard:[[{text:"✏️ Начать рассылку",callback_data:"a:bs"}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
+    case "a_bcast":   t="📨 <b>Рассылка</b>\n\nОтправьте текст рассылки (поддерживается HTML).\nРассылка отправляется с задержкой ~30 мс между сообщениями."; kb={inline_keyboard:[[{text:"✏️ Начать рассылку",callback_data:"a:bs"}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
     case "a_pay":     t=`💳 <b>Способы оплаты</b>\n\n${esc(setting("payment_methods","Пока пусто."))}`; kb={inline_keyboard:[[{text:"✏️ Изменить",callback_data:"a:pe"}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
     case "a_ref":     t=["🤝 <b>Реф. настройки</b>","",`Ставка:      <b>${setting("ref_percent","30")}%</b>`,`Мин. вывод:  <b>${rub(setting("ref_withdraw_min","500"))}</b>`].join("\n"); kb={inline_keyboard:[[{text:"✏️ Ставка",callback_data:"a:rp"},{text:"✏️ Мин. вывод",callback_data:"a:rm"}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
-    case "a_db":      t="🗄 <b>База данных</b>\n\nСкачайте или импортируйте БД (после импорта бот перезапустится)."; kb={inline_keyboard:[[{text:"⬇️ Скачать БД",callback_data:"a:db_export"}],[{text:"⬆️ Импорт БД",callback_data:"a:db_import_start"}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
+    case "a_db":      t="🗄 <b>База данных</b>\n\nСкачайте или импортируйте БД.\n⚠️ После импорта бот перезапустится автоматически."; kb={inline_keyboard:[[{text:"⬇️ Скачать БД",callback_data:"a:db_export"}],[{text:"⬆️ Импорт БД",callback_data:"a:db_import_start"}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break;
     case "a_user_info":{ const tu=user(data.id); if(!tu){t="Пользователь не найден.";kb=back("a:main");break;} t=adminUserInfoText(tu); kb={inline_keyboard:[[{text:"➕ Пополнить баланс",callback_data:`a:bal_add:${tu.tg_id}`}],[{text:"⬅️ Назад",callback_data:"a:main"}]]}; break; }
   }
   const nm=await editOrSend(chatId,msgId,t,kb);
@@ -547,9 +610,20 @@ async function handleAdminState(msg) {
 
   switch(row.state){
     case "db_import_wait":
-      if(!msg.document?.file_id){await tg("sendMessage",{chat_id:chatId,text:"Ожидаю файл SQLite (.db/.sqlite)."});return true;}
-      try{await tg("sendMessage",{chat_id:chatId,text:"⏳ Импортирую базу данных..."});await importDbFromDocument(msg.document.file_id);clearAdminState(aid);await tg("sendMessage",{chat_id:chatId,text:"✅ Импорт завершён. Перезапускаю бота..."});setTimeout(()=>restartBot(),500);}
-      catch(e){await tg("sendMessage",{chat_id:chatId,text:`❌ Ошибка импорта: ${e.message}`});}
+      if(!msg.document?.file_id){await tg("sendMessage",{chat_id:chatId,text:"⏳ Ожидаю файл SQLite (.db/.sqlite документом)."});return true;}
+      try {
+        await tg("sendMessage",{chat_id:chatId,text:"⏳ Проверяю и скачиваю базу данных..."});
+        // 1. Download + validate BEFORE touching current db or states
+        const tmpPath = await downloadImportFile(msg.document.file_id);
+        // 2. Clear state while DB is still open
+        clearAdminState(aid);
+        // 3. Notify user
+        await tg("sendMessage",{chat_id:chatId,text:"✅ Файл получен. Перезапускаю бота с новой базой данных..."});
+        // 4. Swap DB and restart (closes DB internally)
+        setTimeout(()=>restartBotWithFile(tmpPath),500);
+      } catch(e) {
+        await tg("sendMessage",{chat_id:chatId,text:`❌ Ошибка импорта: ${e.message}`});
+      }
       return true;
 
     case "tariff_price":{
@@ -559,7 +633,7 @@ async function handleAdminState(msg) {
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_tariffs"); return true;
     }
     case "gif":{
-      const v=msg.animation?.file_id||text; if(!v){await tg("sendMessage",{chat_id:chatId,text:"Отправьте GIF или file_id."});return true;}
+      const v=msg.animation?.file_id||msg.video?.file_id||text; if(!v){await tg("sendMessage",{chat_id:chatId,text:"Отправьте GIF или file_id."});return true;}
       setSetting(row.payload,v); clearAdminState(aid); await tg("sendMessage",{chat_id:chatId,text:"✅ GIF сохранён."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_gif"); return true;
     }
@@ -569,13 +643,30 @@ async function handleAdminState(msg) {
 
     case "broadcast":{
       clearAdminState(aid);
-      const ids=db.prepare("SELECT tg_id FROM users").all(); let ok=0,fail=0;
-      for(const u of ids){try{const g=setting("gif_broadcast","");if(g)await tg("sendAnimation",{chat_id:u.tg_id,animation:g,caption:text,parse_mode:"HTML"});else await tg("sendMessage",{chat_id:u.tg_id,text,parse_mode:"HTML"});ok++;}catch{fail++;}}
-      await tg("sendMessage",{chat_id:chatId,text:`📨 Рассылка завершена.\n✅ Доставлено: ${ok}\n❌ Ошибок: ${fail}`});
+      const ids=db.prepare("SELECT tg_id FROM users").all();
+      let ok=0, fail=0;
+      const gifKey=setting("gif_broadcast","");
+      // Send progress message
+      const progMsg=await tg("sendMessage",{chat_id:chatId,text:`📨 Рассылка запущена...\n0 / ${ids.length}`}).catch(()=>null);
+      for(let i=0;i<ids.length;i++){
+        const uid=ids[i].tg_id;
+        try {
+          if(gifKey) await tg("sendAnimation",{chat_id:uid,animation:gifKey,caption:text,parse_mode:"HTML"});
+          else        await tg("sendMessage",{chat_id:uid,text,parse_mode:"HTML"});
+          ok++;
+        } catch { fail++; }
+        // Respect Telegram rate limit: ~30 msg/sec
+        await sleep(35);
+        // Update progress every 20 users
+        if(progMsg && (i+1)%20===0){
+          tg("editMessageText",{chat_id:chatId,message_id:progMsg.message_id,text:`📨 Рассылка...\n${i+1} / ${ids.length}`}).catch(()=>{});
+        }
+      }
+      await tg("sendMessage",{chat_id:chatId,text:`📨 <b>Рассылка завершена</b>\n✅ Доставлено: <b>${ok}</b>\n❌ Ошибок: <b>${fail}</b>`,parse_mode:"HTML"});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_bcast"); return true;
     }
     case "ref_percent":{
-      const n=Number(text); if(!Number.isFinite(n)||n<0||n>100){await tg("sendMessage",{chat_id:chatId,text:"Введите 0..100."});return true;}
+      const n=Number(text); if(!Number.isFinite(n)||n<0||n>100){await tg("sendMessage",{chat_id:chatId,text:"Введите значение от 0 до 100."});return true;}
       setSetting("ref_percent",Math.round(n)); clearAdminState(aid); await tg("sendMessage",{chat_id:chatId,text:`✅ Ставка: ${Math.round(n)}%`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_ref"); return true;
     }
@@ -606,7 +697,7 @@ async function handleAdminState(msg) {
       let found=null;
       if(/^\d+$/.test(text)) found=user(Number(text));
       if(!found) found=db.prepare("SELECT * FROM users WHERE username=?").get(text.replace(/^@/,""));
-      if(!found){await tg("sendMessage",{chat_id:chatId,text:"Пользователь не найден."});return true;}
+      if(!found){await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден."});return true;}
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_user_info",{id:found.tg_id}); return true;
     }
   }
@@ -676,14 +767,25 @@ async function handleMessage(msg) {
   // Admin commands
   if(isAdmin(from.id)){
     if(text.startsWith("/add_balance")){
-      const p=text.split(/\s+/); if(p.length!==3){await tg("sendMessage",{chat_id:chatId,text:"Формат: /add_balance <id> <amount>"});return;}
-      if(!user(Number(p[1]))||!Number.isFinite(Number(p[2]))){await tg("sendMessage",{chat_id:chatId,text:"Неверные параметры."});return;}
-      const nb=updateBalance(Number(p[1]),Number(p[2])); await tg("sendMessage",{chat_id:chatId,text:`✅ Баланс ${p[1]}: ${rub(nb)}`}); return;
+      const p=text.split(/\s+/); if(p.length!==3){await tg("sendMessage",{chat_id:chatId,text:"Формат: /add_balance &lt;id&gt; &lt;amount&gt;",parse_mode:"HTML"});return;}
+      const tid=Number(p[1]),amt=Number(p[2]);
+      if(!user(tid)||!Number.isFinite(amt)){await tg("sendMessage",{chat_id:chatId,text:"Неверные параметры."});return;}
+      const nb=updateBalance(tid,amt); await tg("sendMessage",{chat_id:chatId,text:`✅ Баланс ${p[1]}: <b>${rub(nb)}</b>`,parse_mode:"HTML"}); return;
     }
     if(text.startsWith("/add_ref_balance")){
-      const p=text.split(/\s+/); if(p.length!==3){await tg("sendMessage",{chat_id:chatId,text:"Формат: /add_ref_balance <id> <amount>"});return;}
-      if(!user(Number(p[1]))||!Number.isFinite(Number(p[2]))){await tg("sendMessage",{chat_id:chatId,text:"Неверные параметры."});return;}
-      const nb=updateRefBalance(Number(p[1]),Number(p[2])); await tg("sendMessage",{chat_id:chatId,text:`✅ Реф-баланс ${p[1]}: ${rub(nb)}`}); return;
+      const p=text.split(/\s+/); if(p.length!==3){await tg("sendMessage",{chat_id:chatId,text:"Формат: /add_ref_balance &lt;id&gt; &lt;amount&gt;",parse_mode:"HTML"});return;}
+      const tid=Number(p[1]),amt=Number(p[2]);
+      if(!user(tid)||!Number.isFinite(amt)){await tg("sendMessage",{chat_id:chatId,text:"Неверные параметры."});return;}
+      const nb=updateRefBalance(tid,amt); await tg("sendMessage",{chat_id:chatId,text:`✅ Реф-баланс ${p[1]}: <b>${rub(nb)}</b>`,parse_mode:"HTML"}); return;
+    }
+    if(text.startsWith("/broadcast")){
+      // Quick broadcast via command: /broadcast Текст рассылки
+      const bText=text.slice("/broadcast".length).trim();
+      if(!bText){await tg("sendMessage",{chat_id:chatId,text:"Формат: /broadcast Текст рассылки"});return;}
+      setAdminState(from.id,"broadcast","");
+      // Simulate as if admin sent the text in broadcast state
+      await handleAdminState({...msg,text:bText});
+      return;
     }
   }
 
@@ -694,8 +796,11 @@ async function handleMessage(msg) {
     await gif(chatId,"gif_main_menu");
     await render(from.id,chatId,null,"home"); return;
   }
-  if(text==="/menu") {await render(from.id,chatId,null,"home"); return;}
-  if(text==="/admin"&&isAdmin(from.id)){await render(from.id,chatId,user(from.id)?.last_menu_id,"a_main"); return;}
+  if(text==="/menu")               { await render(from.id,chatId,null,"home"); return; }
+  if(text==="/sub")                { await render(from.id,chatId,null,"sub");  return; }
+  if(text==="/balance")            { await render(from.id,chatId,null,"bal");  return; }
+  if(text==="/referral")           { await render(from.id,chatId,null,"ref");  return; }
+  if(text==="/admin"&&isAdmin(from.id)){ await render(from.id,chatId,user(from.id)?.last_menu_id,"a_main"); return; }
 
   await tg("sendMessage",{chat_id:chatId,text:"Используйте /start для открытия меню."});
 }
@@ -811,10 +916,10 @@ async function poll() {
       const ups=await tg("getUpdates",{timeout:30,offset,allowed_updates:["message","callback_query"]});
       for(const u of ups){
         offset=u.update_id+1;
-        if(u.message)        handleMessage(u.message).catch(e=>console.error("[msg]",e.message));
+        if(u.message)             handleMessage(u.message).catch(e=>console.error("[msg]",e.message));
         else if(u.callback_query) handleCallback(u.callback_query).catch(e=>console.error("[cb]",e.message));
       }
-    } catch(e){ console.error("[poll]",e.message); await new Promise(r=>setTimeout(r,2000)); }
+    } catch(e){ console.error("[poll]",e.message); await sleep(2000); }
   }
 }
 
