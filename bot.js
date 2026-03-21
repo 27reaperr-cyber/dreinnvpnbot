@@ -36,6 +36,24 @@ const db      = new Database(DB_FILE);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
+// ── Rate limiting (prevent spam clicks) ──────────────────────────────────────
+const _cbCooldown = new Map(); // uid → last callback ts
+function checkCbRateLimit(uid) {
+  const now_ = Date.now(), last = _cbCooldown.get(uid)||0;
+  if (now_ - last < 400) return false; // 400ms between callbacks per user
+  _cbCooldown.set(uid, now_);
+  // GC: purge stale entries every 500 callbacks
+  if (_cbCooldown.size > 500) {
+    const cutoff = Date.now() - 60000;
+    for (const [k,v] of _cbCooldown) if (v < cutoff) _cbCooldown.delete(k);
+  }
+  return true;
+}
+
+// ── Process crash protection ──────────────────────────────────────────────────
+process.on("uncaughtException",  e => console.error("[uncaughtException]",  e));
+process.on("unhandledRejection", e => console.error("[unhandledRejection]", e));
+
 // ─────────────────────────────────────────────────────────────────────────────
 // i18n — Translations
 // ─────────────────────────────────────────────────────────────────────────────
@@ -687,14 +705,24 @@ function setRef(uid,rid)        { const u=user(uid); if(!u||u.referred_by||Numbe
 // Purchase logic  (FIXED: renewal adds days, doesn't reset)
 // ─────────────────────────────────────────────────────────────────────────────
 async function createSubViaApi(target, tr, giftMode) {
-  const r = await fetch(`${API}/api/bot-subscription`,{
-    method:"POST",
-    headers:{"Content-Type":"application/json","x-app-secret":APP_SECRET},
-    body:JSON.stringify({telegramUserId:String(target.tg_id),telegramUsername:target.username||"",firstName:target.first_name||"",durationDays:tr.duration_days,name:`VPN ${tr.title}`,description:giftMode?`Подарок: ${tr.title}`:`Тариф: ${tr.title}`}),
-  });
-  const j = await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(j.error||`API HTTP ${r.status}`);
-  return j;
+  const ctrl = new AbortController();
+  const tid  = setTimeout(()=>ctrl.abort(), 20000);
+  try {
+    const r = await fetch(`${API}/api/bot-subscription`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-app-secret":APP_SECRET},
+      body:JSON.stringify({telegramUserId:String(target.tg_id),telegramUsername:target.username||"",firstName:target.first_name||"",durationDays:tr.duration_days,name:`VPN ${tr.title}`,description:giftMode?`Подарок: ${tr.title}`:`Тариф: ${tr.title}`}),
+      signal:ctrl.signal,
+    });
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(j.error||`API HTTP ${r.status}`);
+    return j;
+  } catch(e) {
+    if(e.name==="AbortError") throw new Error("API timeout — сервер не ответил");
+    throw e;
+  } finally {
+    clearTimeout(tid);
+  }
 }
 
 async function doPurchase(payerId, receiverId, code, kind) {
@@ -878,13 +906,13 @@ function topupKb(uid) {
 function refKb(uid) {
   const tx=T(uid), u=user(uid);
   const link=refLink(u.ref_code);
-  // Build t.me/share/url — opens native Telegram chat picker
+  // t.me/share/url requires ?url= (mandatory), &text= is prepended before the URL by Telegram.
+  // Result in chat: "Привет. Подключись к VPN по моей ссылке:\nhttps://t.me/bot?start=partner_xxx\nРаботает быстро и стабильно."
   const isRu=getLang(uid)==="ru";
   const shareText=isRu
-    ? `Привет. Подключись к VPN по моей ссылке:\n\n${link}\n\nРаботает быстро и стабильно.`
-    : `Hey! Connect to VPN using my link:\n\n${link}\n\nFast and reliable.`;
-  // Pass only &text= so the link appears inside the message body, not prepended by Telegram
-  const shareUrl="https://t.me/share/url?text="+encodeURIComponent(shareText);
+    ? "Привет. Подключись к VPN по моей ссылке:\n\nРаботает быстро и стабильно."
+    : "Hey! Connect to VPN using my link:\n\nFast and reliable.";
+  const shareUrl="https://t.me/share/url?url="+encodeURIComponent(link)+"&text="+encodeURIComponent(shareText);
   const rows=[];
   // URL button → opens Telegram's native share picker
   rows.push([{text:tx.btn_invite, url:shareUrl}]);
@@ -905,21 +933,6 @@ function giftKb(uid) {
     ...tariffs().map(t=>[{text:`🎁 ${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`g:p:${t.code}`}]),
     [{text:tx.btn_home,callback_data:"v:home"}],
   ]};
-}
-
-function giftUsersKb(uid, code, page) {
-  const tx=T(uid), {items,total,page:p,size}=usersPage(page,uid,8);
-  const max=Math.max(0,Math.ceil(total/size)-1);
-  const rows=items.map(u=>[{text:`${u.first_name||u.username||u.tg_id} (${u.username?`@${u.username}`:`id:${u.tg_id}`})`,callback_data:`g:u:${code}:${u.tg_id}`}]);
-  const nav=[];
-  if(p>0)   nav.push({text:"◀",callback_data:`g:l:${code}:${p-1}`});
-  nav.push({text:`${p+1}/${max+1}`,callback_data:"noop"});
-  if(p<max) nav.push({text:"▶",callback_data:`g:l:${code}:${p+1}`});
-  rows.push(nav);
-  // Enter by ID
-  rows.push([{text:"✏️ Ввести ID / @username",callback_data:`g:id:${code}`}]);
-  rows.push([{text:tx.btn_back,callback_data:"v:gift"}]);
-  return{inline_keyboard:rows};
 }
 
 function langKb(uid) {
@@ -1144,7 +1157,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       text=homeText(u); kb=homeKb(uid); photo=viewImg("home");
       break;
     case "profile":
-      text=profileText(uid); kb=profileKb(uid); photo=viewImg("sub");
+      text=profileText(uid); kb=profileKb(uid); photo=viewImg("profile")||viewImg("sub");
       break;
     case "sub":
       text=subText(uid); kb=subKb(uid); photo=viewImg("sub");
@@ -1203,12 +1216,6 @@ async function render(uid, chatId, msgId, view, data={}) {
     case "gift":
       text=[tx.gift_title,"",tx.gift_choose].join("\n"); kb=giftKb(uid); photo=viewImg("gift");
       break;
-    case "gift_users": {
-      const tr=tariff(data.code);
-      text=tr?[tx.gift_recv,"",tx.gift_recv_d].join("\n"):"Тариф не найден.";
-      kb=tr?giftUsersKb(uid,tr.code,data.page||0):back(uid,"v:gift"); photo=viewImg("gift");
-      break;
-    }
     case "purchases": {
       const {text:ht,total,size}=purchasesText(uid,Number(data.page||0));
       text=ht; kb=pagingKb(uid,"ph",Number(data.page||0),total,size,"v:profile"); photo="";
@@ -1379,7 +1386,8 @@ async function handleAdminState(msg) {
     }
     case "edit_link": {
       const urlVal=text.trim();
-      if(urlVal&&!urlVal.startsWith("http")){await tg("sendMessage",{chat_id:chatId,text:"Введите корректный URL (https://...) или «-» для очистки."});return true;}
+      const validUrl=!urlVal||urlVal==="-"||urlVal.startsWith("http")||urlVal.startsWith("@")||urlVal.startsWith("t.me/");
+      if(!validUrl){await tg("sendMessage",{chat_id:chatId,text:"Введите URL (https://...), @username, t.me/... или «-» для очистки."});return true;}
       if(urlVal==="-"||urlVal==="") delSetting(row.payload);
       else setSetting(row.payload,urlVal);
       clearAdminState(aid);
@@ -1581,6 +1589,9 @@ async function handleCallback(q) {
   upsertUser(q.from,chatId);
   const ans=(text="",alert=false)=>tg("answerCallbackQuery",{callback_query_id:q.id,...(text?{text,show_alert:alert}:{})}).catch(()=>{});
 
+  // Rate limit: ignore rapid repeated taps (except noop/check which user intentionally retries)
+  if(!data.startsWith("cp:check")&&!data.startsWith("cp:cancel")&&!checkCbRateLimit(uid)){await ans();return;}
+
   if(data==="noop"){await ans();return;}
   if(data.startsWith("a:")&&!isAdmin(uid)){await ans("Нет доступа.",true);return;}
 
@@ -1650,24 +1661,23 @@ async function handleCallback(q) {
     const code=data.split(":")[2],tr=tariff(code),u=user(uid),tx=T(uid);
     if(!tr){await ans("Тариф не найден.",true);return;}
     if(Number(u.balance_rub)<Number(tr.price_rub)){await ans(tx.gift_no_bal(tr.price_rub,u.balance_rub),true);return;}
-    await render(uid,chatId,msgId,"gift_users",{code,page:0}); await ans(); return;
+    // Skip user list — go straight to ID/username input
+    setUserState(uid,"gift_recipient_id",code); await ans();
+    const lang=getLang(uid), isRu=lang==="ru";
+    const promptText=isRu
+      ? `🎁 <b>${esc(tariffTitle(tr,lang))}</b>\n\n${tx.gift_enter_id}`
+      : `🎁 <b>${esc(tariffTitle(tr,lang))}</b>\n\n${tx.gift_enter_id}`;
+    await tg("sendMessage",{chat_id:chatId,text:promptText,parse_mode:"HTML",
+      reply_markup:{keyboard:[[{text:isRu?"Отмена":"Cancel"}]],resize_keyboard:true,one_time_keyboard:true}});
+    return;
   }
-  if(data.startsWith("g:l:")){const[,,code,page]=data.split(":");await render(uid,chatId,msgId,"gift_users",{code,page:Number(page||0)});await ans();return;}
-  if(data.startsWith("g:u:")){
-    const[,,code,rid]=data.split(":");
-    await askGiftConfirm(uid,chatId,msgId,code,Number(rid),q.id); return;
-  }
+  // g:l: (user list pagination) removed
+  // g:u: (select user from list) removed
   if(data.startsWith("g:cf:")){
     const[,,code,rid]=data.split(":");
     await giftToUser(uid,Number(rid),code,chatId,msgId,q.id); return;
   }
-  if(data.startsWith("g:id:")){
-    // User wants to enter recipient ID manually
-    const code=data.split(":")[2], tx=T(uid);
-    setUserState(uid,"gift_recipient_id",code); await ans();
-    await tg("sendMessage",{chat_id:chatId,text:tx.gift_enter_id,parse_mode:"HTML",reply_markup:{keyboard:[[{text:"Отмена"}]],resize_keyboard:true,one_time_keyboard:true}});
-    return;
-  }
+  // g:id: handler merged into g:p: flow above
 
   // ── Crypto topup ──────────────────────────────────────────────────────────
   if(data==="topup:crypto"){
