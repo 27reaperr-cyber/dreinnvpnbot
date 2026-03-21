@@ -62,7 +62,10 @@ const I18N = {
     btn_gift_send:  "🎁 Подарить",
     btn_invite:     "📨 Пригласить друга",
 
+    btn_qr:         "📷 QR-код подписки",
     btn_ref_code:   "🔄 Сменить код реферала",
+    ref_code_confirm: "⚠️ <b>Сменить реферальный код?</b>\n\n<i>Все старые ссылки перестанут работать.</i>",
+    sub_qr_caption: "📷 <b>QR-код подписки</b>\n\n<i>Отсканируйте камерой или приложением для подключения.</i>",
     btn_ref_hist:   "📋 История начислений",
     btn_support:    "💬 Поддержка",
     btn_privacy:    "🔒 Политика конфиденциальности",
@@ -194,7 +197,10 @@ const I18N = {
     btn_gift_send:  "🎁 Gift",
     btn_invite:     "📨 Invite a friend",
 
+    btn_qr:         "📷 Subscription QR Code",
     btn_ref_code:   "🔄 Reset ref code",
+    ref_code_confirm: "⚠️ <b>Reset referral code?</b>\n\n<i>All old links will stop working.</i>",
+    sub_qr_caption: "📷 <b>Subscription QR Code</b>\n\n<i>Scan with your camera or VPN app to connect.</i>",
     btn_ref_hist:   "📋 Earnings history",
     btn_support:    "💬 Support",
     btn_privacy:    "🔒 Privacy policy",
@@ -356,11 +362,19 @@ function tariffs()    { return db.prepare("SELECT * FROM tariffs ORDER BY sort_o
 function tariff(c)    { return db.prepare("SELECT * FROM tariffs WHERE code=?").get(c); }
 
 function updateBalance(uid, delta) {
-  const u = user(uid); if (!u) throw new Error("NO_USER");
-  const n = Number(u.balance_rub) + Number(delta);
-  if (n < 0) throw new Error("NO_MONEY");
-  db.prepare("UPDATE users SET balance_rub=?,updated_at=? WHERE tg_id=?").run(n, now(), Number(uid));
-  return n;
+  if (!user(uid)) throw new Error("NO_USER");
+  const d = Number(delta);
+  if (d < 0) {
+    // Atomic deduction: only succeeds if balance stays >= 0
+    const res = db.prepare(
+      "UPDATE users SET balance_rub=balance_rub+?,updated_at=? WHERE tg_id=? AND balance_rub+?>=0"
+    ).run(d, now(), Number(uid), d);
+    if (res.changes === 0) throw new Error("NO_MONEY");
+  } else {
+    db.prepare("UPDATE users SET balance_rub=balance_rub+?,updated_at=? WHERE tg_id=?")
+      .run(d, now(), Number(uid));
+  }
+  return Number(db.prepare("SELECT balance_rub FROM users WHERE tg_id=?").get(Number(uid))?.balance_rub ?? 0);
 }
 
 function usersPage(page, me, size=8) {
@@ -479,10 +493,16 @@ function init() {
 // Telegram API
 // ─────────────────────────────────────────────────────────────────────────────
 async function tg(method, params) {
-  const r = await fetch(`${TG_BASE}/${method}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(params)});
-  const j = await r.json().catch(()=>({}));
-  if(!r.ok||j.ok===false) throw new Error(j.description||`TG HTTP ${r.status}`);
-  return j.result;
+  const ctrl = new AbortController();
+  const tid = setTimeout(()=>ctrl.abort(), 30000);
+  try {
+    const r = await fetch(`${TG_BASE}/${method}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(params),signal:ctrl.signal});
+    const j = await r.json().catch(()=>({}));
+    if(!r.ok||j.ok===false) throw new Error(j.description||`TG HTTP ${r.status}`);
+    return j.result;
+  } finally {
+    clearTimeout(tid);
+  }
 }
 
 async function tgSendFile(method, chatId, fieldName, filePath, extra={}) {
@@ -704,7 +724,7 @@ async function doPurchase(payerId, receiverId, code, kind) {
 
   db.transaction(()=>{
     updateBalance(payerId,-Number(tr.price_rub));
-    if(payerId===receiverId) addReferralReward(receiverId,tr.price_rub);
+    addReferralReward(payerId, tr.price_rub); // always reward referrer of payer
     db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,updated_at=excluded.updated_at")
       .run(Number(receiverId),tr.code,tr.title,subUrl,newExpiresAt,now(),now());
     db.prepare("INSERT INTO purchases(tg_id,tariff_code,tariff_title,amount_rub,kind,created_at) VALUES(?,?,?,?,?,?)").run(Number(payerId),tr.code,tr.title,Number(tr.price_rub),kind,now());
@@ -791,7 +811,10 @@ async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
     if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"🎁"});
   } catch(e) {
     const tx=T(fromId);
-    const map={NO_MONEY:tx.gift_no_bal(0,0).split(",")[0]||"Недостаточно средств.",ACTIVE:"У получателя уже есть подписка."};
+    const map={
+      NO_MONEY: getLang(fromId)==="en" ? "Insufficient balance." : "Недостаточно средств.",
+      ACTIVE:   getLang(fromId)==="en" ? "Recipient already has an active subscription." : "У получателя уже есть активная подписка.",
+    };
     if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:map[e.message]||e.message,show_alert:true});
     if(msgId) await render(fromId,chatId,msgId,"home");
   }
@@ -825,12 +848,13 @@ function subKb(uid) {
   const tx=T(uid), s=sub(uid), rows=[];
   if(activeSub(s)){
     rows.push([{text:tx.btn_connect,url:s.sub_url}]);
+    rows.push([{text:tx.btn_qr,callback_data:"sub:qr"}]);
     rows.push([{text:tx.btn_guide,callback_data:"v:guide"}]);
   } else {
     // Expired or no sub — show buy button
     rows.push([{text:tx.btn_buy_sub,callback_data:"v:buy"}]);
   }
-  rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
+  rows.push([{text:tx.btn_back_profile,callback_data:"v:profile"},{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
 
@@ -839,7 +863,7 @@ function buyKb(uid) {
   // Always "new" purchase — renewal of active sub is blocked in doPurchase
   const lang=getLang(uid);
   const rows=tariffs().map(t=>[{text:`${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`pay:n:${t.code}`}]);
-  rows.push([{text:tx.btn_back,callback_data:"v:profile"}]);
+  rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
 
@@ -857,9 +881,10 @@ function refKb(uid) {
   // Build t.me/share/url — opens native Telegram chat picker
   const isRu=getLang(uid)==="ru";
   const shareText=isRu
-    ? "Привет. Подключись к VPN по моей ссылке:\n\nРаботает быстро и стабильно."
-    : "Hey! Connect to VPN using my link:\n\nFast and reliable.";
-  const shareUrl="https://t.me/share/url?url="+encodeURIComponent(link)+"&text="+encodeURIComponent(shareText);
+    ? `Привет. Подключись к VPN по моей ссылке:\n\n${link}\n\nРаботает быстро и стабильно.`
+    : `Hey! Connect to VPN using my link:\n\n${link}\n\nFast and reliable.`;
+  // Pass only &text= so the link appears inside the message body, not prepended by Telegram
+  const shareUrl="https://t.me/share/url?text="+encodeURIComponent(shareText);
   const rows=[];
   // URL button → opens Telegram's native share picker
   rows.push([{text:tx.btn_invite, url:shareUrl}]);
@@ -1584,11 +1609,34 @@ async function handleCallback(q) {
 
   // ── Subscription ──────────────────────────────────────────────────────────
   // sub:copy removed (guide button replaces it)
+  if(data==="sub:qr"){
+    const s=sub(uid);
+    if(!activeSub(s)){await ans(getLang(uid)==="en"?"No active subscription.":"Нет активной подписки.",true);return;}
+    await ans();
+    const tx=T(uid);
+    const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=16&data=${encodeURIComponent(s.sub_url)}`;
+    await tg("sendPhoto",{chat_id:chatId,photo:qrUrl,caption:tx.sub_qr_caption,parse_mode:"HTML"})
+      .catch(async()=>{
+        await tg("sendMessage",{chat_id:chatId,text:getLang(uid)==="en"?"❌ QR generation failed. Use the link above.":"❌ Не удалось сгенерировать QR-код. Используйте ссылку выше."}).catch(()=>{});
+      });
+    return;
+  }
 
   // ── Referral ──────────────────────────────────────────────────────────────
   // ref:i removed — link shown inline in refText
   // ref:share removed — invite uses t.me/share/url URL button
   if(data==="ref:r"){
+    // Show confirmation before changing code
+    const isRu=getLang(uid)==="ru";
+    const confirmTxt=T(uid).ref_code_confirm;
+    const kb={inline_keyboard:[
+      [{text:T(uid).btn_confirm,callback_data:"ref:r:yes"},{text:T(uid).btn_cancel,callback_data:"v:ref"}],
+    ]};
+    const nm=await renderMsg(chatId,msgId,confirmTxt,kb,null);
+    setMenu(uid,chatId,nm);
+    await ans(); return;
+  }
+  if(data==="ref:r:yes"){
     db.prepare("UPDATE users SET ref_code=?,updated_at=? WHERE tg_id=?").run(crypto.randomBytes(5).toString("hex"),now(),uid);
     await render(uid,chatId,msgId,"ref"); await ans("✅"); return;
   }
