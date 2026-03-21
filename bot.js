@@ -153,8 +153,20 @@ const I18N = {
     gift_self:   "Нельзя подарить самому себе.",
     gift_enter_id: "Введите Telegram ID или @username получателя:",
     // About
-    about_title: "<b>О сервисе</b>",
-    about_text:  "<i>Надёжный VPN с быстрой выдачей ключа, продлением через Telegram и реферальной программой.</i>",
+    about_title: "<b>🌐 О сервисе Dreinn VPN</b>",
+    about_text:  [
+      "<b>⚡️ Возможности</b>",
+      "• Выбор стран подключения",
+      "• Быстрое и стабильное соединение",
+      "• Работает корректно с любыми приложениями — можно оставлять включённым постоянно",
+      "• Поддержка всех популярных устройств",
+      "",
+      "<b>🧭 Умная маршрутизация</b>",
+      "Сервисы, требующие локального доступа, автоматически подключаются через соответствующий регион. Остальные ресурсы открываются через выбранную вами страну. Всё работает плавно, без необходимости ручного переключения.",
+      "",
+      "<b>🛡 Конфиденциальность</b>",
+      "Мы заботимся о вашей приватности: не сохраняем историю действий и не передаём данные сторонним сервисам. Все сведения о подключениях удаляются автоматически.",
+    ].join("\n"),
     // Guide — stored in settings, parsed at render time
     guide_title: "<b>Инструкция по подключению</b>",
     // Confirm buy
@@ -279,8 +291,20 @@ const I18N = {
     gift_no_bal: (need,have) => `Need ${rub(need)}, you have ${rub(have)}`,
     gift_self:   "You can't gift to yourself.",
     gift_enter_id: "Enter recipient's Telegram ID or @username:",
-    about_title: "<b>About</b>",
-    about_text:  "<i>Reliable VPN with instant key generation, Telegram renewal and referral program.</i>",
+    about_title: "<b>🌐 About Dreinn VPN</b>",
+    about_text:  [
+      "<b>⚡️ Features</b>",
+      "• Choice of connection countries",
+      "• Fast and stable connection",
+      "• Works seamlessly with any app — safe to leave on all the time",
+      "• Supports all popular devices",
+      "",
+      "<b>🧭 Smart routing</b>",
+      "Services that require local access automatically connect through the appropriate region. Everything else opens through your chosen country. It all works smoothly, with no manual switching needed.",
+      "",
+      "<b>🛡 Privacy</b>",
+      "We care about your privacy: we do not store activity logs or share data with third parties. All connection records are deleted automatically.",
+    ].join("\n"),
     guide_title: "<b>Connection guide</b>",
     confirm_title: (mode) => `<b>${mode==="renew"?"Renew subscription":"Buy subscription"}</b>`,
     confirm_plan:  (v) => `Plan: <b>${esc(v)}</b>`,
@@ -736,6 +760,7 @@ async function doPurchase(payerId, receiverId, code, kind) {
   const s=sub(receiverId), act=activeSub(s);
   if(kind==="new"   && act)  throw new Error("ACTIVE");
   if(kind==="renew" && !act) throw new Error("NO_ACTIVE");
+  if(kind==="gift"  && act)  throw new Error("ACTIVE");
   if(Number(payer.balance_rub)<Number(tr.price_rub)) throw new Error("NO_MONEY");
 
   const api    = await createSubViaApi(receiver,tr,kind==="gift");
@@ -812,6 +837,14 @@ async function askGiftConfirm(uid, chatId, msgId, code, toId, cbid) {
   const tr=tariff(code), to=user(toId), u=user(uid), tx=T(uid);
   if(!tr){await cbAns("Тариф не найден");return;}
   if(!to){await cbAns("Пользователь не найден");return;}
+  // Block gift if recipient already has an active subscription
+  const toSub=sub(toId);
+  if(activeSub(toSub)){
+    const msg=getLang(uid)==="en"
+      ? "❌ Recipient already has an active subscription."
+      : "❌ У получателя уже есть активная подписка.";
+    await cbAns(msg); return;
+  }
   if(Number(u.balance_rub)<Number(tr.price_rub)){await cbAns(tx.gift_no_bal(tr.price_rub,u.balance_rub));return;}
   const toName=to.first_name||(to.username?`@${to.username}`:`ID ${to.tg_id}`);
   const lang=getLang(uid);
