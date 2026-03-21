@@ -488,6 +488,10 @@ function init() {
     "ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'",
   ]) { try { db.exec(m); } catch {} }
 
+  // Seed new settings into existing DBs (ON CONFLICT DO NOTHING keeps existing values)
+  const ssNew = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING");
+  ssNew.run("guide_text_en", "📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/ke9ab]");
+
   // Seed tariffs
   const st = db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(code) DO NOTHING");
   [["m1","1 месяц",30,100,1],["m6","6 месяцев",180,600,2],["y1","1 год",365,900,3]].forEach(r=>st.run(...r));
@@ -497,7 +501,8 @@ function init() {
   const defaults = [
     ["payment_methods",""],["gif_main_menu",""],["gif_purchase_success",""],["gif_gift_success",""],["gif_broadcast",""],
     ["ref_percent","30"],
-    ["guide_text","📋 <b>Инструкция по подключению VPN:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru], [v2RayTun|https://v2raytun.com/] или другие XRay клиенты.\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в клиент.\n3. Всё готово! Теперь вы можете подключиться к защищённому интернету.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/ke9ab]"],
+    ["guide_text","📋 <b>Инструкция по подключению:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru] или [v2RayTun|https://v2raytun.com/].\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в приложение.\n3. Всё готово — интернет работает через наш сервер.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/ke9ab]"],
+    ["guide_text_en","📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/ke9ab]"],
     // Per-section images (empty = no image)
     ["img_home",""],["img_sub",""],["img_buy",""],["img_bal",""],["img_ref",""],
     ["img_gift",""],["img_guide",""],["img_about",""],["img_topup",""],
@@ -800,11 +805,14 @@ async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid) {
 
 // Gift: confirmation step before sending
 async function askGiftConfirm(uid, chatId, msgId, code, toId, cbid) {
-  if(Number(uid)===Number(toId)){await tg("answerCallbackQuery",{callback_query_id:cbid,text:T(uid).gift_self,show_alert:true});return;}
+  const cbAns = (text, alert=true) => cbid
+    ? tg("answerCallbackQuery",{callback_query_id:cbid,text,show_alert:alert}).catch(()=>{})
+    : tg("sendMessage",{chat_id:chatId,text,parse_mode:"HTML"}).catch(()=>{});
+  if(Number(uid)===Number(toId)){await cbAns(T(uid).gift_self);return;}
   const tr=tariff(code), to=user(toId), u=user(uid), tx=T(uid);
-  if(!tr){await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
-  if(!to){await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Пользователь не найден",show_alert:true});return;}
-  if(Number(u.balance_rub)<Number(tr.price_rub)){await tg("answerCallbackQuery",{callback_query_id:cbid,text:tx.gift_no_bal(tr.price_rub,u.balance_rub),show_alert:true});return;}
+  if(!tr){await cbAns("Тариф не найден");return;}
+  if(!to){await cbAns("Пользователь не найден");return;}
+  if(Number(u.balance_rub)<Number(tr.price_rub)){await cbAns(tx.gift_no_bal(tr.price_rub,u.balance_rub));return;}
   const toName=to.first_name||(to.username?`@${to.username}`:`ID ${to.tg_id}`);
   const lang=getLang(uid);
   const lines=[
@@ -820,7 +828,7 @@ async function askGiftConfirm(uid, chatId, msgId, code, toId, cbid) {
   ]};
   const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("gift"));
   setMenu(uid,chatId,nm);
-  await tg("answerCallbackQuery",{callback_query_id:cbid});
+  if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid}).catch(()=>{});
 }
 
 async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
@@ -1177,7 +1185,10 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb={inline_keyboard:[[{text:tx.btn_back,callback_data:"v:topup"}]]}; photo="";
       break;
     case "guide": {
-      const rawGuide=setting("guide_text","");
+      const lang=getLang(uid);
+      const rawGuide = lang==="en"
+        ? (setting("guide_text_en","")||setting("guide_text",""))
+        : setting("guide_text","");
       text=rawGuide?parseLinks(rawGuide):[tx.guide_title,"","<i>Инструкция не настроена.</i>"].join("\n");
       const kbRows=[];
       if(lnk.support()) kbRows.push([{text:tx.btn_support,url:lnk.support()}]);
@@ -1292,8 +1303,20 @@ async function render(uid, chatId, msgId, view, data={}) {
       break;
     }
     case "a_guide_edit":
-      text=`<b>Инструкция по подключению</b>\n\n<i>Используйте формат [Название|URL] для ссылок.</i>\n\nТекущий текст:\n<blockquote>${esc(setting("guide_text","")).slice(0,300)}</blockquote>`;
-      kb={inline_keyboard:[[{text:"✏️ Изменить",callback_data:"a:guide"}],[{text:"« Назад",callback_data:"a:main"}]]};
+      text=[
+        "<b>Инструкция по подключению</b>",
+        "",
+        "<i>Формат ссылок: [Название|URL]</i>",
+        "",
+        `🇷🇺 <b>RU</b>: <blockquote>${esc(setting("guide_text","")).slice(0,200)||"<i>не задана</i>"}</blockquote>`,
+        "",
+        `🇬🇧 <b>EN</b>: <blockquote>${esc(setting("guide_text_en","")).slice(0,200)||"<i>not set</i>"}</blockquote>`,
+      ].join("\n");
+      kb={inline_keyboard:[
+        [{text:"✏️ Изменить 🇷🇺 Русский",callback_data:"a:guide_ru"}],
+        [{text:"✏️ Edit 🇬🇧 English",callback_data:"a:guide_en"}],
+        [{text:"« Назад",callback_data:"a:main"}],
+      ]};
       break;
     default:
       text=homeText(u); kb=homeKb(uid); photo=viewImg("home");
@@ -1401,8 +1424,13 @@ async function handleAdminState(msg) {
 
     case "guide_text":
       setSetting("guide_text",text); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"✅ Инструкция обновлена."});
-      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_main"); return true;
+      await tg("sendMessage",{chat_id:chatId,text:"✅ Инструкция (RU) обновлена."});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_guide_edit"); return true;
+
+    case "guide_text_en":
+      setSetting("guide_text_en",text); clearAdminState(aid);
+      await tg("sendMessage",{chat_id:chatId,text:"✅ Guide (EN) updated."});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_guide_edit"); return true;
 
     case "broadcast": {
       clearAdminState(aid);
@@ -1447,7 +1475,7 @@ async function handleAdminState(msg) {
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_user_info",{id:found.tg_id}); return true;
     }
     case "gift_recipient_id": {
-      // Admin/user entered a gift recipient ID or username
+      // User entered a gift recipient ID or username
       clearUserState(aid);
       const code=row.payload;
       let found=null;
@@ -1457,19 +1485,8 @@ async function handleAdminState(msg) {
         await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден в боте."});
         return true;
       }
-      const tr=tariff(code), u=user(aid);
-      if(!tr||!u){return true;}
-      // Show gift confirm
-      const toId=found.tg_id;
-      if(Number(aid)===Number(toId)){await tg("sendMessage",{chat_id:chatId,text:T(aid).gift_self});return true;}
-      if(Number(u.balance_rub)<Number(tr.price_rub)){await tg("sendMessage",{chat_id:chatId,text:T(aid).gift_no_bal(tr.price_rub,u.balance_rub),parse_mode:"HTML"});return true;}
-      const toName=found.first_name||(found.username?`@${found.username}`:`ID ${found.tg_id}`);
-      const tx=T(aid);
-      const lines=[tx.gift_confirm_title,"",tx.gift_to(toName),tx.gift_plan(tr.title),tx.gift_price(tr.price_rub),tx.gift_after(Number(u.balance_rub)-Number(tr.price_rub))];
-      await tg("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[
-        [{text:tx.btn_confirm,callback_data:`g:cf:${code}:${toId}`}],
-        [{text:tx.btn_cancel,callback_data:"v:gift"}],
-      ]}});
+      // Route through the standard confirm screen
+      await askGiftConfirm(aid, chatId, user(aid)?.last_menu_id||null, code, found.tg_id, null);
       return true;
     }
   }
@@ -1510,21 +1527,17 @@ async function handleMessage(msg) {
     if(!msg.text||msg.text.startsWith("/")) return;
     const code=ustate.payload||"";
     clearUserState(from.id);
+    // Remove reply keyboard first
+    await tg("sendMessage",{chat_id:chatId,text:"✕",reply_markup:{remove_keyboard:true}}).catch(()=>{});
     let found=null;
     if(/^\d+$/.test(text)) found=user(Number(text));
     if(!found&&text.startsWith("@")) found=db.prepare("SELECT * FROM users WHERE username=?").get(text.slice(1));
-    if(!found){await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден. Попросите его нажать /start.",reply_markup:{remove_keyboard:true}});return;}
-    const tr=tariff(code), u=user(from.id), tx=T(from.id);
-    if(!tr||!u) return;
-    if(Number(from.id)===Number(found.tg_id)){await tg("sendMessage",{chat_id:chatId,text:tx.gift_self,reply_markup:{remove_keyboard:true}});return;}
-    if(Number(u.balance_rub)<Number(tr.price_rub)){await tg("sendMessage",{chat_id:chatId,text:tx.gift_no_bal(tr.price_rub,u.balance_rub),parse_mode:"HTML",reply_markup:{remove_keyboard:true}});return;}
-    const toName=found.first_name||(found.username?`@${found.username}`:`ID ${found.tg_id}`);
-    const lines=[tx.gift_confirm_title,"",tx.gift_to(toName),tx.gift_plan(tr.title),tx.gift_price(tr.price_rub),tx.gift_after(Number(u.balance_rub)-Number(tr.price_rub))];
-    await tg("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",reply_markup:{remove_keyboard:true}});
-    await tg("sendMessage",{chat_id:chatId,text:"\u200b",reply_markup:{inline_keyboard:[
-      [{text:tx.btn_confirm,callback_data:`g:cf:${code}:${found.tg_id}`}],
-      [{text:tx.btn_cancel,callback_data:"v:gift"}],
-    ]}});
+    if(!found){
+      await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден. Попросите его нажать /start."});
+      return;
+    }
+    // Route through the standard confirm screen (edits the main inline menu)
+    await askGiftConfirm(from.id, chatId, user(from.id)?.last_menu_id||null, code, found.tg_id, null);
     return;
   }
 
@@ -1532,19 +1545,9 @@ async function handleMessage(msg) {
   if(msg.user_shared&&ustate?.state==="gift_pick"){
     const recipientId=Number(msg.user_shared.user_id||0), code=ustate.payload||"";
     clearUserState(from.id);
-    await tg("sendMessage",{chat_id:chatId,text:"",reply_markup:{remove_keyboard:true}});
+    await tg("sendMessage",{chat_id:chatId,text:"✕",reply_markup:{remove_keyboard:true}}).catch(()=>{});
     if(!user(recipientId)){await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не зарегистрирован. Попросите нажать /start."});return;}
-    // Show confirm
-    const tr=tariff(code), u=user(from.id), tx=T(from.id);
-    if(!tr||!u) return;
-    if(Number(from.id)===Number(recipientId)){await tg("sendMessage",{chat_id:chatId,text:tx.gift_self});return;}
-    if(Number(u.balance_rub)<Number(tr.price_rub)){await tg("sendMessage",{chat_id:chatId,text:tx.gift_no_bal(tr.price_rub,u.balance_rub),parse_mode:"HTML"});return;}
-    const to=user(recipientId), toName=to?.first_name||(to?.username?`@${to.username}`:`ID ${recipientId}`);
-    const lines=[tx.gift_confirm_title,"",tx.gift_to(toName),tx.gift_plan(tr.title),tx.gift_price(tr.price_rub),tx.gift_after(Number(u.balance_rub)-Number(tr.price_rub))];
-    await tg("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[
-      [{text:tx.btn_confirm,callback_data:`g:cf:${code}:${recipientId}`}],
-      [{text:tx.btn_cancel,callback_data:"v:gift"}],
-    ]}});
+    await askGiftConfirm(from.id, chatId, user(from.id)?.last_menu_id||null, code, recipientId, null);
     return;
   }
 
@@ -1753,7 +1756,8 @@ async function handleCallback(q) {
   }
   if(data==="a:bs"){setAdminState(uid,"broadcast","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст рассылки (HTML).\n/cancel — отмена."});await ans();return;}
   if(data==="a:pe"){setAdminState(uid,"pay_methods","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст способов пополнения.\n/cancel — отмена."});await ans();return;}
-  if(data==="a:guide"){setAdminState(uid,"guide_text","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст инструкции.\nФормат ссылок: [Название|URL]\n/cancel — отмена."});await ans();return;}
+  if(data==="a:guide_ru"){setAdminState(uid,"guide_text","");await tg("sendMessage",{chat_id:chatId,text:"🇷🇺 Отправьте текст инструкции на русском.\nФормат ссылок: [Название|URL]\n/cancel — отмена."});await ans();return;}
+  if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await tg("sendMessage",{chat_id:chatId,text:"🇬🇧 Send the guide text in English.\nLink format: [Label|URL]\n/cancel — cancel."});await ans();return;}
   if(data==="a:rp"){setAdminState(uid,"ref_percent","");await tg("sendMessage",{chat_id:chatId,text:`Ставка: ${setting("ref_percent","30")}%\n\nВведите новую (0..100):\n/cancel — отмена.`});await ans();return;}
 
   if(data==="a:find"){setAdminState(uid,"find_user","");await tg("sendMessage",{chat_id:chatId,text:"Введите Telegram ID или @username:\n/cancel — отмена."});await ans();return;}
