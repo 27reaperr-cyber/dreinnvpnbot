@@ -1734,6 +1734,8 @@ async function handleAdminState(msg) {
 async function handleMessage(msg) {
   const from=msg.from||{}, chatId=Number(msg.chat?.id||0);
   if(!chatId||!from.id) return;
+  // Ignore messages from group/supergroup/channel chats — bot is private-only
+  if(msg.chat?.type!=="private") return;
   upsertUser(from,chatId);
   const ustate=getUserState(from.id);
   const text=String(msg.text||"").trim();
@@ -1827,6 +1829,8 @@ async function handleMessage(msg) {
 async function handleCallback(q) {
   const data=q.data||"", uid=Number(q.from?.id||0), chatId=Number(q.message?.chat?.id||0), msgId=Number(q.message?.message_id||0);
   if(!uid||!chatId||!msgId) return;
+  // Ignore callbacks from group/supergroup/channel chats
+  if(q.message?.chat?.type!=="private") { await tg("answerCallbackQuery",{callback_query_id:q.id}).catch(()=>{}); return; }
   upsertUser(q.from,chatId);
   const ans=(text="",alert=false)=>tg("answerCallbackQuery",{callback_query_id:q.id,...(text?{text,show_alert:alert}:{})}).catch(()=>{});
 
