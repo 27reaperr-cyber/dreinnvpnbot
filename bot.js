@@ -15,7 +15,7 @@ const APP_SECRET       = process.env.APP_SECRET            || "";
 const ADMIN_ID         = Number(process.env.ADMIN_TELEGRAM_ID || 0);
 const DB_FILE          = process.env.SQLITE_PATH           || path.join(__dirname, "bot.db");
 const NEWS_URL         = process.env.BOT_NEWS_URL          || "";
-const SUPPORT_URL      = process.env.BOT_SUPPORT_URL       || "";
+const SUPPORT_URL      = process.env.BOT_SUPPORT_URL       || "https://t.me/dreinnvpnsupportbot";
 const FREE_PROXY       = process.env.BOT_FREE_PROXY_URL    || "";
 const BOT_USERNAME     = process.env.BOT_USERNAME          || "";
 // CryptoBot
@@ -99,6 +99,19 @@ const I18N = {
     btn_check:      "✅ Проверить оплату",
     btn_pay_crypto: "💎 Crypto Bot (USDT)",
     btn_pay_other:  "💳 Другие способы оплаты",
+    // Channel gate
+    btn_check_sub:  "✅ Я подписался",
+    btn_open_channel:"📢 Открыть канал",
+    gate_text:      (url) => `<b>Для использования бота необходимо подписаться на наш канал.</b>\n\n<a href="${url}">👉 Перейти в канал</a>`,
+    gate_not_subscribed: "❌ Вы ещё не подписались на канал. Подпишитесь и нажмите «Я подписался».",
+    // Trial
+    btn_trial:      "🎁 Пробный период (7 дней)",
+    trial_confirm:  (days) => `<b>Пробный период — ${days} дней</b>\n\n<i>Бесплатно, один раз. После истечения можно купить любой тариф.</i>\n\nАктивировать?`,
+    trial_activated:(days) => `<b>✅ Пробный период активирован!</b>\n\n<i>Доступ открыт на ${days} дней.</i>`,
+    trial_used_msg: "Пробный период уже использован.",
+    trial_has_sub:  "У вас уже есть активная подписка.",
+    channel_gate:   "👋 Чтобы пользоваться ботом, подпишитесь на наш канал.",
+    btn_check_sub:  "✅ Я подписался",
     // Language
     lang_title:  "🌐 <b>Выбор языка</b>",
     lang_current:"Текущий язык",
@@ -246,6 +259,19 @@ const I18N = {
     btn_check:      "✅ Check payment",
     btn_pay_crypto: "💎 Crypto Bot (USDT)",
     btn_pay_other:  "💳 Other payment methods",
+    // Channel gate
+    btn_check_sub:  "✅ I've subscribed",
+    btn_open_channel:"📢 Open channel",
+    gate_text:      (url) => `<b>To use the bot you need to subscribe to our channel.</b>\n\n<a href="${url}">👉 Go to channel</a>`,
+    gate_not_subscribed: "❌ You haven't subscribed to the channel yet. Subscribe and tap «I've subscribed».",
+    // Trial
+    btn_trial:      "🎁 Free trial (7 days)",
+    trial_confirm:  (days) => `<b>Free trial — ${days} days</b>\n\n<i>Free, one time only. After expiry you can buy any plan.</i>\n\nActivate?`,
+    trial_activated:(days) => `<b>✅ Free trial activated!</b>\n\n<i>Access granted for ${days} days.</i>`,
+    trial_used_msg: "Free trial already used.",
+    trial_has_sub:  "You already have an active subscription.",
+    channel_gate:   "👋 To use the bot, please subscribe to our channel.",
+    btn_check_sub:  "✅ I've subscribed",
     lang_title:  "🌐 <b>Language</b>",
     lang_current:"Current language",
     lang_ru:     "🇷🇺 Русский",
@@ -463,6 +489,7 @@ function init() {
       payout_method TEXT NOT NULL DEFAULT '', payout_details TEXT NOT NULL DEFAULT '',
       last_chat_id INTEGER, last_menu_id INTEGER,
       lang TEXT NOT NULL DEFAULT 'ru',
+      trial_used INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_ref_code ON users(ref_code);
@@ -510,11 +537,16 @@ function init() {
     "ALTER TABLE users ADD COLUMN ref_balance_rub INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN ref_earned INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'",
+    "ALTER TABLE users ADD COLUMN trial_used INTEGER NOT NULL DEFAULT 0",
   ]) { try { db.exec(m); } catch {} }
 
   // Seed new settings into existing DBs (ON CONFLICT DO NOTHING keeps existing values)
   const ssNew = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING");
-  ssNew.run("guide_text_en", "📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/ke9ab]");
+  ssNew.run("guide_text_en", "📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/dreinnvpnsupportbot]");
+  ssNew.run("channel_id", "");
+  ssNew.run("channel_invite_url", "");
+  ssNew.run("trial_enabled", "1");
+  ssNew.run("trial_days", "7");
 
   // Seed tariffs
   const st = db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(code) DO NOTHING");
@@ -525,13 +557,18 @@ function init() {
   const defaults = [
     ["payment_methods",""],["gif_main_menu",""],["gif_purchase_success",""],["gif_gift_success",""],["gif_broadcast",""],
     ["ref_percent","30"],
-    ["guide_text","📋 <b>Инструкция по подключению:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru] или [v2RayTun|https://v2raytun.com/].\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в приложение.\n3. Всё готово — интернет работает через наш сервер.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/ke9ab]"],
-    ["guide_text_en","📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/ke9ab]"],
+    ["guide_text","📋 <b>Инструкция по подключению:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru] или [v2RayTun|https://v2raytun.com/].\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в приложение.\n3. Всё готово — интернет работает через наш сервер.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/dreinnvpnsupportbot]"],
+    ["guide_text_en","📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/dreinnvpnsupportbot]"],
     // Per-section images (empty = no image)
     ["img_home",""],["img_sub",""],["img_buy",""],["img_bal",""],["img_ref",""],
     ["img_gift",""],["img_guide",""],["img_about",""],["img_topup",""],
+    // Channel gate & trial
+    ["channel_id",""],             // e.g. -1001234567890 or @mychannel
+    ["channel_invite_url",""],     // optional direct invite link shown to user
+    ["trial_enabled","1"],         // "1" = on, "0" = off
+    ["trial_days","7"],            // duration of trial in days
     // Configurable links
-    ["url_support",""],["url_privacy",""],["url_terms",""],["url_proxy",""],["url_news",""],["url_status","https://dreinnvpn.vercel.app"],
+    ["url_support","https://t.me/dreinnvpnsupportbot"],["url_privacy",""],["url_terms",""],["url_proxy",""],["url_news",""],["url_status","https://dreinnvpn.vercel.app"],
   ];
   defaults.forEach(([k,v])=>ss.run(k,v));
 }
@@ -730,8 +767,76 @@ function setMenu(uid,chatId,mid){ db.prepare("UPDATE users SET last_chat_id=?,la
 function findRef(code)          { return db.prepare("SELECT * FROM users WHERE ref_code=?").get(String(code||"").trim()); }
 function setRef(uid,rid)        { const u=user(uid); if(!u||u.referred_by||Number(uid)===Number(rid)) return; db.prepare("UPDATE users SET referred_by=?,updated_at=? WHERE tg_id=?").run(Number(rid),now(),Number(uid)); }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Purchase logic  (FIXED: renewal adds days, doesn't reset)
+// ── Channel gate helpers ──────────────────────────────────────────────────────
+function getChannelId() { return setting("channel_id","").trim(); }
+
+async function checkChannelMembership(userId) {
+  const chanId = getChannelId();
+  if (!chanId) return true; // no channel configured → always pass
+  try {
+    const m = await tg("getChatMember", { chat_id: chanId, user_id: Number(userId) });
+    return ["member","administrator","creator"].includes(m?.status);
+  } catch { return false; }
+}
+
+function getChannelUrl() {
+  const inv = setting("channel_invite_url","").trim();
+  if (inv) return inv;
+  const id = getChannelId();
+  if (!id) return "";
+  if (id.startsWith("@")) return `https://t.me/${id.slice(1)}`;
+  return ""; // numeric id without invite link — admin must set channel_invite_url
+}
+
+// ── Trial helpers ─────────────────────────────────────────────────────────────
+function trialEnabled() { return setting("trial_enabled","1")==="1"; }
+function trialDays()    { return Math.max(1,Math.min(365,Number(setting("trial_days","7"))||7)); }
+function hasUsedTrial(uid) { return !!(db.prepare("SELECT trial_used FROM users WHERE tg_id=?").get(Number(uid))?.trial_used); }
+function markTrialUsed(uid) { db.prepare("UPDATE users SET trial_used=1,updated_at=? WHERE tg_id=?").run(now(),Number(uid)); }
+
+// ── Channel gate: sends subscription prompt and returns false if blocked ───────
+async function enforceChannelGate(uid, chatId, lang) {
+  if (!getChannelId()) return true;           // no channel configured
+  const member = await checkChannelMembership(uid);
+  if (member) return true;                    // already subscribed
+  const tx = I18N[lang] || I18N.ru;
+  const chanUrl = getChannelUrl();
+  const rows = [];
+  if (chanUrl) rows.push([{text:"📢 Подписаться / Subscribe",url:chanUrl}]);
+  rows.push([{text:tx.btn_check_sub,callback_data:"gate:check"}]);
+  await tg("sendMessage",{
+    chat_id:chatId,
+    text:tx.channel_gate,
+    parse_mode:"HTML",
+    reply_markup:{inline_keyboard:rows},
+  });
+  return false;
+}
+
+// ── Trial purchase execution ───────────────────────────────────────────────────
+async function doTrial(uid, chatId, msgId) {
+  const tx = T(uid);
+  if (hasUsedTrial(uid)) { await tg("answerCallbackQuery",{callback_query_id:"",text:tx.trial_used_msg,show_alert:true}).catch(()=>{}); return; }
+  if (activeSub(sub(uid))) { await tg("answerCallbackQuery",{callback_query_id:"",text:tx.trial_has_sub,show_alert:true}).catch(()=>{}); return; }
+  const days = trialDays();
+  // Create subscription via API (zero cost, duration = trial days)
+  const u = user(uid);
+  const fakeTariff = {code:"trial",title:getLang(uid)==="en"?`Free Trial (${days}d)`:`Пробный период (${days} дн.)`,duration_days:days,price_rub:0};
+  const api = await createSubViaApi(u, fakeTariff, false);
+  const subUrl = api.subscriptionUrl || api.sub_url || "";
+  if (!subUrl) { await tg("sendMessage",{chat_id:chatId,text:"❌ Ошибка API. Попробуйте позже."}); return; }
+  const exp = now() + days * 86400000;
+  db.transaction(()=>{
+    db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,updated_at=excluded.updated_at")
+      .run(Number(uid),"trial",fakeTariff.title,subUrl,exp,now(),now());
+    markTrialUsed(uid);
+  })();
+  await gif(chatId,"gif_purchase_success");
+  const lines=[tx.trial_activated(days),"",`<code>${esc(subUrl)}</code>`];
+  const kb={inline_keyboard:[[{text:tx.btn_connect,url:subUrl}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]};
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("buy"));
+  setMenu(uid,chatId,nm);
+}
 // ─────────────────────────────────────────────────────────────────────────────
 async function createSubViaApi(target, tr, giftMode) {
   const ctrl = new AbortController();
@@ -932,6 +1037,12 @@ function buyKb(uid) {
   // Always "new" purchase — renewal of active sub is blocked in doPurchase
   const lang=getLang(uid);
   const rows=tariffs().map(t=>[{text:`${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`pay:n:${t.code}`}]);
+  // Show trial button if enabled and user hasn't used it and has no active sub
+  if(trialEnabled()&&!hasUsedTrial(uid)&&!activeSub(sub(uid))){
+    const days=trialDays();
+    const label=getLang(uid)==="en"?`🎁 Free trial (${days} days)`:`🎁 Пробный период (${days} дней)`;
+    rows.unshift([{text:label,callback_data:"trial:start"}]);
+  }
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
@@ -1279,6 +1390,7 @@ async function render(uid, chatId, msgId, view, data={}) {
         [{text:"📨 Рассылка",callback_data:"a:b"},{text:"🔗 Ссылки",callback_data:"a:links"}],
         [{text:"🖼 Изображения",callback_data:"a:imgs"},{text:"💰 Текст пополнения",callback_data:"a:p"}],
         [{text:"🤝 Реф. процент",callback_data:"a:r"},{text:"📋 Инструкция",callback_data:"a:guide_edit"}],
+        [{text:"📢 Канал + Пробный период",callback_data:"a:channel"}],
         [{text:"🔍 Поиск юзера",callback_data:"a:find"}],
         [{text:"🗄 База данных",callback_data:"a:db"}],
         [{text:"« Назад",callback_data:"v:home"}],
@@ -1335,7 +1447,31 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb={inline_keyboard:[[{text:"➕ Пополнить баланс",callback_data:`a:bal_add:${tu.tg_id}`}],[{text:"✏️ Ред. подписку",callback_data:`a:sub_edit:${tu.tg_id}`}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     }
-    case "a_guide_edit":
+    case "a_channel": {
+      const chanId   = setting("channel_id","") || "<i>не задан</i>";
+      const chanUrl  = setting("channel_invite_url","") || "<i>не задана</i>";
+      const tEnabled = trialEnabled();
+      const tDays    = trialDays();
+      text=[
+        "<b>📢 Канал + Пробный период</b>",
+        "",
+        `Канал (ID/@username): <code>${esc(chanId)}</code>`,
+        `Ссылка-приглашение: ${esc(chanUrl)}`,
+        "",
+        `Пробный период: <b>${tEnabled?"включён ✅":"выключен ❌"}</b>`,
+        `Длительность: <b>${tDays} дн.</b>`,
+        "",
+        "<i>Бот должен быть администратором канала для проверки подписки.</i>",
+      ].join("\n");
+      kb={inline_keyboard:[
+        [{text:"✏️ Установить канал",callback_data:"a:chan_id"}],
+        [{text:"🔗 Ссылка-приглашение",callback_data:"a:chan_url"}],
+        [{text:tEnabled?"🔴 Отключить пробный":"🟢 Включить пробный",callback_data:"a:trial_toggle"}],
+        [{text:`⏱ Длительность: ${tDays} дн.`,callback_data:"a:trial_days"}],
+        [{text:"« Назад",callback_data:"a:main"}],
+      ]};
+      break;
+    }
       text=[
         "<b>Инструкция по подключению</b>",
         "",
@@ -1522,9 +1658,40 @@ async function handleAdminState(msg) {
       await askGiftConfirm(aid, chatId, user(aid)?.last_menu_id||null, code, found.tg_id, null);
       return true;
     }
-  }
+    case "chan_id": {
+      clearAdminState(aid);
+      const val = text.trim();
+      if(val==="-"||val==="") {
+        delSetting("channel_id");
+        await tg("sendMessage",{chat_id:chatId,text:"✅ Канал отключён."});
+      } else {
+        setSetting("channel_id", val);
+        await tg("sendMessage",{chat_id:chatId,text:`✅ Канал установлен: <code>${esc(val)}</code>`,parse_mode:"HTML"});
+      }
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_channel"); return true;
+    }
+    case "chan_url": {
+      clearAdminState(aid);
+      const val = text.trim();
+      if(val==="-"||val==="") {
+        delSetting("channel_invite_url");
+        await tg("sendMessage",{chat_id:chatId,text:"✅ Ссылка очищена."});
+      } else {
+        setSetting("channel_invite_url", val);
+        await tg("sendMessage",{chat_id:chatId,text:`✅ Ссылка сохранена.`,parse_mode:"HTML"});
+      }
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_channel"); return true;
+    }
+    case "trial_days": {
+      const n = parseInt(text,10);
+      if(!Number.isFinite(n)||n<1||n>365){await tg("sendMessage",{chat_id:chatId,text:"Введите число от 1 до 365."});return true;}
+      setSetting("trial_days",String(n)); clearAdminState(aid);
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Длительность: ${n} дн.`});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_channel"); return true;
+    }
+  } // end switch
   return false;
-}
+} // end handleAdminState
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Message handler
@@ -1604,6 +1771,9 @@ async function handleMessage(msg) {
   if(text.startsWith("/start")){
     const m=text.match(/^\/start\s+partner_([a-zA-Z0-9]+)$/);
     if(m){const r=findRef(m[1]);if(r)setRef(from.id,r.tg_id);}
+    const lang=getLang(from.id);
+    const passed=await enforceChannelGate(from.id,chatId,lang);
+    if(!passed) return;
     await gif(chatId,"gif_main_menu");
     await render(from.id,chatId,null,"home"); return;
   }
@@ -1629,6 +1799,50 @@ async function handleCallback(q) {
   if(!data.startsWith("cp:check")&&!data.startsWith("cp:cancel")&&!checkCbRateLimit(uid)){await ans();return;}
 
   if(data==="noop"){await ans();return;}
+
+  // ── Channel gate check ────────────────────────────────────────────────────
+  if(data==="gate:check"){
+    const member=await checkChannelMembership(uid);
+    if(!member){
+      await ans(getLang(uid)==="en"?"❗ You haven't subscribed yet.":"❗ Вы ещё не подписались.",true);
+      return;
+    }
+    // Passed — delete gate message and show main menu
+    await tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
+    await gif(chatId,"gif_main_menu");
+    await render(uid,chatId,null,"home");
+    await ans(); return;
+  }
+
+  // ── Trial period ──────────────────────────────────────────────────────────
+  if(data==="trial:start"){
+    const tx=T(uid);
+    if(!trialEnabled()){await ans(getLang(uid)==="en"?"Trial not available.":"Пробный период недоступен.",true);return;}
+    if(hasUsedTrial(uid)){await ans(tx.trial_used_msg,true);return;}
+    if(activeSub(sub(uid))){await ans(tx.trial_has_sub,true);return;}
+    const days=trialDays();
+    const lines=[tx.trial_confirm(days)];
+    const kb={inline_keyboard:[
+      [{text:tx.btn_confirm,callback_data:"trial:confirm"}],
+      [{text:tx.btn_cancel,callback_data:"v:home"}],
+    ]};
+    const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("buy"));
+    setMenu(uid,chatId,nm);
+    await ans(); return;
+  }
+  if(data==="trial:confirm"){
+    const tx=T(uid);
+    if(!trialEnabled()){await ans(getLang(uid)==="en"?"Trial not available.":"Пробный период недоступен.",true);return;}
+    if(hasUsedTrial(uid)){await ans(tx.trial_used_msg,true);return;}
+    if(activeSub(sub(uid))){await ans(tx.trial_has_sub,true);return;}
+    await ans();
+    try{
+      await doTrial(uid,chatId,msgId);
+    }catch(e){
+      await tg("sendMessage",{chat_id:chatId,text:`❌ ${e.message}`}).catch(()=>{});
+    }
+    return;
+  }
   if(data.startsWith("a:")&&!isAdmin(uid)){await ans("Нет доступа.",true);return;}
 
   // ── Language ──────────────────────────────────────────────────────────────
@@ -1748,8 +1962,31 @@ async function handleCallback(q) {
   }
 
   // ── Admin nav ─────────────────────────────────────────────────────────────
-  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_pay","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit"};
+  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_pay","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel"};
   if(adminNav[data]){await render(uid,chatId,msgId,adminNav[data]);await ans();return;}
+
+  // ── Channel / trial admin actions ─────────────────────────────────────────
+  if(data==="a:chan_id"){
+    setAdminState(uid,"chan_id","");
+    await tg("sendMessage",{chat_id:chatId,text:`Текущий канал: <code>${esc(setting("channel_id","") || "не задан")}</code>\n\nВведите @username или числовой ID канала (например <code>@dreinnvpn</code> или <code>-1001234567890</code>).\nДля отключения введите «-».\n/cancel — отмена.`,parse_mode:"HTML"});
+    await ans(); return;
+  }
+  if(data==="a:chan_url"){
+    setAdminState(uid,"chan_url","");
+    await tg("sendMessage",{chat_id:chatId,text:`Текущая ссылка: <code>${esc(setting("channel_invite_url","") || "не задана")}</code>\n\nВведите ссылку-приглашение (https://t.me/+...) для приватных каналов, или «-» для очистки.\n/cancel — отмена.`,parse_mode:"HTML"});
+    await ans(); return;
+  }
+  if(data==="a:trial_toggle"){
+    const next=trialEnabled()?"0":"1";
+    setSetting("trial_enabled",next);
+    await ans(next==="1"?"✅ Пробный период включён":"❌ Пробный период отключён");
+    await render(uid,chatId,msgId,"a_channel"); return;
+  }
+  if(data==="a:trial_days"){
+    setAdminState(uid,"trial_days","");
+    await tg("sendMessage",{chat_id:chatId,text:`Текущая длительность: <b>${trialDays()} дн.</b>\n\nВведите новое значение (1..365):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await ans(); return;
+  }
 
   // ── Admin edit triggers ───────────────────────────────────────────────────
   if(data.startsWith("a:te:")){
