@@ -61,8 +61,7 @@ const I18N = {
     btn_buy_sub:    "💳 Купить подписку",
     btn_gift_send:  "🎁 Подарить",
     btn_invite:     "📨 Пригласить друга",
-    btn_withdraw:   "💸 Вывести средства",
-    btn_payout_set: "🏦 Способ вывода",
+
     btn_ref_code:   "🔄 Сменить код реферала",
     btn_ref_hist:   "📋 История начислений",
     btn_support:    "💬 Поддержка",
@@ -114,10 +113,7 @@ const I18N = {
     ref_desc:    (pct) => `Приглашайте друзей и получайте <b>${pct}%</b> с каждой их покупки.`,
     ref_invited: (v) => `Приглашено: <b>${v}</b>`,
     ref_earned:  (v) => `Заработано всего: <b>${rub(v)}</b>`,
-    ref_balance: (v) => `Реф. баланс: <b>${rub(v)}</b>`,
-    ref_min:     (v) => `Мин. вывод: <b>${rub(v)}</b>`,
-    ref_method:  (v) => `Метод: <b>${esc(v||"не задан")}</b>`,
-    ref_pending: "<i>Заявка на вывод в обработке</i>",
+
     ref_link_hdr:"Ваша реферальная ссылка:",
     ref_bonus:   (pct, amt) => `<blockquote>+${rub(amt)} — реф. вознаграждение ${pct}%</blockquote>`,
     // Gift
@@ -154,14 +150,7 @@ const I18N = {
     success_paid:  (v) => `Списано: <b>${rub(v)}</b>`,
     success_bal:   (v) => `Баланс: <b>${rub(v)}</b>`,
     success_exp:   (v) => `Истекает: <b>${dt(v)}</b>`,
-    // Payout
-    payout_title:  "<b>Способ вывода</b>",
-    payout_curr:   (m,d) => `<blockquote>Метод: ${esc(m||"не задан")}\nРеквизиты: ${esc(d||"не заданы")}</blockquote>`,
-    payout_choose: "Выберите метод:",
-    withdraw_title:"<b>Вывод реферальных средств</b>",
-    withdraw_bal:  (v) => `Реф. баланс: <b>${rub(v)}</b>`,
-    withdraw_min:  (v) => `Минимум: <b>${rub(v)}</b>`,
-    withdraw_enter:"Введите сумму:",
+
     // Crypto
     crypto_title:  "<b>Пополнение через Crypto Bot</b>",
     crypto_desc:   "Оплата в USDT (TRC20). Мгновенное зачисление.",
@@ -204,8 +193,7 @@ const I18N = {
     btn_buy_sub:    "💳 Buy subscription",
     btn_gift_send:  "🎁 Gift",
     btn_invite:     "📨 Invite a friend",
-    btn_withdraw:   "💸 Withdraw",
-    btn_payout_set: "🏦 Payout method",
+
     btn_ref_code:   "🔄 Reset ref code",
     btn_ref_hist:   "📋 Earnings history",
     btn_support:    "💬 Support",
@@ -250,10 +238,7 @@ const I18N = {
     ref_desc:    (pct) => `Invite friends and earn <b>${pct}%</b> of each purchase.`,
     ref_invited: (v) => `Invited: <b>${v}</b>`,
     ref_earned:  (v) => `Total earned: <b>${rub(v)}</b>`,
-    ref_balance: (v) => `Ref balance: <b>${rub(v)}</b>`,
-    ref_min:     (v) => `Min withdrawal: <b>${rub(v)}</b>`,
-    ref_method:  (v) => `Method: <b>${esc(v||"not set")}</b>`,
-    ref_pending: "<i>Withdrawal request in progress</i>",
+
     ref_link_hdr:"Your referral link:",
     ref_bonus:   (pct, amt) => `<blockquote>+${rub(amt)} referral bonus ${pct}%</blockquote>`,
     gift_title:  "<b>Gift subscription</b>",
@@ -285,13 +270,7 @@ const I18N = {
     success_paid:  (v) => `Charged: <b>${rub(v)}</b>`,
     success_bal:   (v) => `Balance: <b>${rub(v)}</b>`,
     success_exp:   (v) => `Expires: <b>${dt(v)}</b>`,
-    payout_title:  "<b>Payout method</b>",
-    payout_curr:   (m,d) => `<blockquote>Method: ${esc(m||"not set")}\nDetails: ${esc(d||"not set")}</blockquote>`,
-    payout_choose: "Choose method:",
-    withdraw_title:"<b>Withdraw referral funds</b>",
-    withdraw_bal:  (v) => `Ref balance: <b>${rub(v)}</b>`,
-    withdraw_min:  (v) => `Minimum: <b>${rub(v)}</b>`,
-    withdraw_enter:"Enter amount:",
+
     crypto_title:  "<b>Top up via Crypto Bot</b>",
     crypto_desc:   "Pay in USDT (TRC20). Instant credit.",
     crypto_min:    (v) => `Minimum: <b>${rub(v)}</b>`,
@@ -383,13 +362,7 @@ function updateBalance(uid, delta) {
   db.prepare("UPDATE users SET balance_rub=?,updated_at=? WHERE tg_id=?").run(n, now(), Number(uid));
   return n;
 }
-function updateRefBalance(uid, delta) {
-  const u = user(uid); if (!u) throw new Error("NO_USER");
-  const n = Number(u.ref_balance_rub||0) + Number(delta);
-  if (n < 0) throw new Error("NO_MONEY");
-  db.prepare("UPDATE users SET ref_balance_rub=?,updated_at=? WHERE tg_id=?").run(n, now(), Number(uid));
-  return n;
-}
+
 function usersPage(page, me, size=8) {
   const p=Math.max(0,Number(page||0)), off=p*size;
   const items = db.prepare("SELECT tg_id,username,first_name FROM users WHERE tg_id!=? ORDER BY updated_at DESC LIMIT ? OFFSET ?").all(Number(me),size,off);
@@ -413,10 +386,7 @@ function addReferralReward(buyerId, amount) {
   tg("sendMessage",{chat_id:r.tg_id,text:msg,parse_mode:"HTML"}).catch(()=>{});
 }
 
-function getWithdrawal(id)          { return db.prepare("SELECT * FROM withdrawal_requests WHERE id=?").get(Number(id)); }
-function userPendingWithdrawal(uid) { return db.prepare("SELECT * FROM withdrawal_requests WHERE tg_id=? AND status='pending'").get(Number(uid)); }
-function pendingWithdrawals()       { return db.prepare("SELECT wr.*,u.first_name,u.username FROM withdrawal_requests wr JOIN users u ON wr.tg_id=u.tg_id WHERE wr.status='pending' ORDER BY wr.created_at ASC").all(); }
-function withdrawalHistory(lim=20)  { return db.prepare("SELECT wr.*,u.first_name,u.username FROM withdrawal_requests wr JOIN users u ON wr.tg_id=u.tg_id ORDER BY wr.updated_at DESC LIMIT ?").all(lim); }
+// Withdrawal system removed — ref rewards go directly to main balance
 
 function setAdminState(id,state,payload="") { db.prepare("INSERT INTO admin_states(admin_tg_id,state,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(admin_tg_id) DO UPDATE SET state=excluded.state,payload=excluded.payload,updated_at=excluded.updated_at").run(Number(id),state,String(payload),now()); }
 function getAdminState(id)                  { return db.prepare("SELECT * FROM admin_states WHERE admin_tg_id=?").get(Number(id)); }
@@ -494,7 +464,7 @@ function init() {
   const ss = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING");
   const defaults = [
     ["payment_methods",""],["gif_main_menu",""],["gif_purchase_success",""],["gif_gift_success",""],["gif_broadcast",""],
-    ["ref_percent","30"],["ref_withdraw_min","500"],
+    ["ref_percent","30"],
     ["guide_text","📋 <b>Инструкция по подключению VPN:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru], [v2RayTun|https://v2raytun.com/] или другие XRay клиенты.\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в клиент.\n3. Всё готово! Теперь вы можете подключиться к защищённому интернету.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/ke9ab]"],
     // Per-section images (empty = no image)
     ["img_home",""],["img_sub",""],["img_buy",""],["img_bal",""],["img_ref",""],
@@ -755,7 +725,7 @@ async function buySelf(uid, chatId, msgId, code, mode, cbid) {
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:"✅"});
   } catch(e) {
     const tx=T(uid);
-    const map={ACTIVE:getLang(uid)==="en"?"Already active. Choose Renew.":"Подписка уже активна. Выберите продление.",NO_ACTIVE:getLang(uid)==="en"?"No active sub to renew.":"Нет активной подписки для продления.",NO_MONEY:getLang(uid)==="en"?"Insufficient balance.":"Недостаточно средств."};
+    const map={ACTIVE:getLang(uid)==="en"?"Already active. Choose Renew.":"Подписка уже активна.",NO_ACTIVE:getLang(uid)==="en"?"No active sub to renew.":"Нет активной подписки для продления.",NO_MONEY:getLang(uid)==="en"?"Insufficient balance.":"Недостаточно средств."};
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:map[e.message]||e.message,show_alert:true});
     if(e.message==="NO_MONEY") await render(uid,chatId,msgId,"topup");
   }
@@ -883,15 +853,16 @@ function topupKb(uid) {
 
 function refKb(uid) {
   const tx=T(uid), u=user(uid);
-  const pending=!!userPendingWithdrawal(uid);
-  const refBal=Number(u.ref_balance_rub||0);
-  const min=Number(setting("ref_withdraw_min","500"))||500;
   const link=refLink(u.ref_code);
+  // Build t.me/share/url — opens native Telegram chat picker
+  const isRu=getLang(uid)==="ru";
+  const shareText=isRu
+    ? "Привет. Подключись к VPN по моей ссылке:\n\nРаботает быстро и стабильно."
+    : "Hey! Connect to VPN using my link:\n\nFast and reliable.";
+  const shareUrl="https://t.me/share/url?url="+encodeURIComponent(link)+"&text="+encodeURIComponent(shareText);
   const rows=[];
-  // Primary: invite — switch_inline_query_chosen_chat for forward sharing
-  // We use callback_data "ref:share" to send the sharable text inline
-  rows.push([{text:tx.btn_invite, callback_data:"ref:share"}]);
-  // History + reset code
+  // URL button → opens Telegram's native share picker
+  rows.push([{text:tx.btn_invite, url:shareUrl}]);
   rows.push([
     {text:tx.btn_ref_hist,callback_data:"ref:hist:0"},
     {text:tx.btn_ref_code,callback_data:"ref:r"},
@@ -900,15 +871,7 @@ function refKb(uid) {
   return{inline_keyboard:rows};
 }
 
-function payoutMethodKb(uid) {
-  const tx=T(uid);
-  return{inline_keyboard:[
-    [{text:"💳 Карта (RU)",callback_data:"ref:pm:card"}],
-    [{text:"🪙 USDT (TRC20)",callback_data:"ref:pm:usdt_trc20"}],
-    [{text:"🏦 СБП",callback_data:"ref:pm:sbp"}],
-    [{text:tx.btn_back,callback_data:"v:ref"}],
-  ]};
-}
+
 
 function giftKb(uid) {
   const tx=T(uid);
@@ -1092,7 +1055,6 @@ function adminStatsText() {
   const newDay  = Number(db.prepare("SELECT COUNT(*) c FROM users WHERE created_at>=?").get(todayTs).c);
   const revDay  = Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM purchases WHERE created_at>=?").get(todayTs).s||0);
   const refPaid = Number(db.prepare("SELECT COALESCE(SUM(reward_rub),0) s FROM referrals").get().s||0);
-  const pending = pendingWithdrawals().length;
   const cryptoTotal=Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM crypto_payments WHERE status='paid'").get().s||0);
   const cryptoCount=Number(db.prepare("SELECT COUNT(*) c FROM crypto_payments WHERE status='paid'").get().c||0);
   return [
@@ -1101,8 +1063,7 @@ function adminStatsText() {
     `Активных подписок: <b>${aCount}</b>`,
     `Выручка за сегодня: <b>${rub(revDay)}</b>`,
     `Общая выручка: <b>${rub(revenue)}</b>`,
-    `Выплачено рефералам: <b>${rub(refPaid)}</b>`,
-    `Заявок на вывод: <b>${pending}</b>`,
+    `Начислено рефералам: <b>${rub(refPaid)}</b>`,
     `Crypto платежей: <b>${cryptoCount}</b> (${rub(cryptoTotal)})`,
   ].join("\n");
 }
@@ -1128,27 +1089,7 @@ function adminLinksText() {
   return lines.join("\n");
 }
 
-function withdrawalPanelView() {
-  const items=pendingWithdrawals();
-  if(!items.length) return{t:"<b>Заявки на вывод</b>\n\nОчередь пуста.",kb:{inline_keyboard:[[{text:"📜 История",callback_data:"a:wr_hist"}],[{text:"« Назад",callback_data:"a:main"}]]}};
-  const shown=items.slice(0,5);
-  const t=`<b>Заявки на вывод</b> (${items.length})\n\n`+shown.map((wr,i)=>[`<b>${i+1}. ${esc(wr.first_name||wr.username||String(wr.tg_id))}</b> (<code>${wr.tg_id}</code>)`,`   ${rub(wr.amount_rub)} · ${esc(wr.method)}`,`   <code>${esc(wr.details)}</code>`,`   <i>${dts(wr.created_at)}</i>`].join("\n")).join("\n\n");
-  const kb={inline_keyboard:[...shown.map(wr=>[{text:`✅ #${wr.id} ${rub(wr.amount_rub)}`,callback_data:`a:wr_a:${wr.id}`},{text:`❌ #${wr.id}`,callback_data:`a:wr_r:${wr.id}`}]),[{text:"🔄",callback_data:"a:wr"},{text:"📜 История",callback_data:"a:wr_hist"},{text:"« Назад",callback_data:"a:main"}]]};
-  return{t,kb};
-}
 
-function withdrawalHistoryText() {
-  const rows=withdrawalHistory(20);
-  if(!rows.length) return "<b>История выводов</b>\n\nПусто.";
-  const lines=["<b>История выводов</b>",""];
-  for(const wr of rows){
-    const icon=wr.status==="approved"?"✅":wr.status==="rejected"?"❌":"⏳";
-    lines.push(`${icon} <b>${rub(wr.amount_rub)}</b> — ${esc(wr.first_name||wr.username||String(wr.tg_id))}`);
-    lines.push(`   <i>${esc(wr.method)} · ${dts(wr.updated_at)}</i>`);
-    if(wr.admin_note) lines.push(`   <blockquote>${esc(wr.admin_note)}</blockquote>`);
-  }
-  return lines.join("\n");
-}
 
 function adminUserInfoText(tu) {
   const ts=sub(tu.tg_id), hasSub=activeSub(ts);
@@ -1158,7 +1099,7 @@ function adminUserInfoText(tu) {
     `ID: <code>${tu.tg_id}</code>`,
     `Имя: ${esc(tu.first_name)}`,
     `Username: ${tu.username?`@${esc(tu.username)}`:"—"}`,
-    `<blockquote>Баланс: <b>${rub(tu.balance_rub)}</b>\nРеф. баланс: <b>${rub(tu.ref_balance_rub||0)}</b>\nРеф. заработано: <b>${rub(tu.ref_earned||0)}</b></blockquote>`,
+    `<blockquote>Баланс: <b>${rub(tu.balance_rub)}</b>\nРеф. начислено: <b>${rub(tu.ref_earned||0)}</b></blockquote>`,
     `Покупок: <b>${pCount}</b>`,
     `Подписка: ${hasSub?`<b>активна</b> до ${dt(ts.expires_at)}`:"нет"}`,
     `<i>Зарегистрирован: ${dt(tu.created_at)}</i>`,
@@ -1233,10 +1174,7 @@ async function render(uid, chatId, msgId, view, data={}) {
     case "ref":
       text=refText(uid); kb=refKb(uid); photo=viewImg("ref");
       break;
-    case "ref_payout":
-      text=[tx.payout_title,"",tx.payout_curr(u.payout_method,u.payout_details),"",tx.payout_choose].join("\n");
-      kb=payoutMethodKb(uid); photo="";
-      break;
+
     case "gift":
       text=[tx.gift_title,"",tx.gift_choose].join("\n"); kb=giftKb(uid); photo=viewImg("gift");
       break;
@@ -1259,21 +1197,19 @@ async function render(uid, chatId, msgId, view, data={}) {
 
     // ── Admin ──────────────────────────────────────────────────────────────
     case "a_main": {
-      const p=pendingWithdrawals().length;
       text=adminStatsText();
       kb={inline_keyboard:[
         [{text:"💸 Тарифы",callback_data:"a:t"},{text:"🎞 GIF-анимации",callback_data:"a:g"}],
         [{text:"📨 Рассылка",callback_data:"a:b"},{text:"🔗 Ссылки",callback_data:"a:links"}],
         [{text:"🖼 Изображения",callback_data:"a:imgs"},{text:"💰 Текст пополнения",callback_data:"a:p"}],
-        [{text:"🤝 Реф. настройки",callback_data:"a:r"},{text:"🔍 Поиск юзера",callback_data:"a:find"}],
-        [{text:p>0?`💸 Заявки (${p}!)` :"💸 Заявки на вывод",callback_data:"a:wr"}],
+        [{text:"🤝 Реф. процент",callback_data:"a:r"},{text:"📋 Инструкция",callback_data:"a:guide_edit"}],
+        [{text:"🔍 Поиск юзера",callback_data:"a:find"}],
         [{text:"🗄 База данных",callback_data:"a:db"}],
         [{text:"« Назад",callback_data:"v:home"}],
       ]};
       break;
     }
-    case "a_wr":      { const{t:wt,kb:wkb}=withdrawalPanelView(); text=wt; kb=wkb; break; }
-    case "a_wr_hist": text=withdrawalHistoryText(); kb={inline_keyboard:[[{text:"« Назад",callback_data:"a:wr"}]]}; break;
+
     case "a_tariffs":
       text=`<b>Цены тарифов</b>\n\n${tariffs().map(x=>`${x.title}: <b>${rub(x.price_rub)}</b>`).join("\n")}`;
       kb={inline_keyboard:[...tariffs().map(x=>[{text:`✏️ ${x.title} — ${rub(x.price_rub)}`,callback_data:`a:te:${x.code}`}]),[{text:"« Назад",callback_data:"a:main"}]]};
@@ -1309,8 +1245,8 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb={inline_keyboard:[[{text:"✏️ Изменить",callback_data:"a:pe"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_ref":
-      text=["<b>Реф. настройки</b>","",`Ставка: <b>${setting("ref_percent","30")}%</b>`,`Мин. вывод: <b>${rub(setting("ref_withdraw_min","500"))}</b>`].join("\n");
-      kb={inline_keyboard:[[{text:"✏️ Ставка",callback_data:"a:rp"},{text:"✏️ Мин. вывод",callback_data:"a:rm"}],[{text:"« Назад",callback_data:"a:main"}]]};
+      text=["<b>Реф. процент</b>","",`Ставка: <b>${setting("ref_percent","30")}%</b>`,`<i>Начисляется на основной баланс пользователя при покупке реферала.</i>`].join("\n");
+      kb={inline_keyboard:[[{text:"✏️ Изменить ставку",callback_data:"a:rp"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_db":
       text="<b>База данных</b>\n\nСкачайте или импортируйте БД.\n⚠️ После импорта бот перезапустится.";
@@ -1460,21 +1396,7 @@ async function handleAdminState(msg) {
       await tg("sendMessage",{chat_id:chatId,text:`✅ Ставка: ${Math.round(n)}%`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_ref"); return true;
     }
-    case "ref_min": {
-      const n=Number(text); if(!Number.isFinite(n)||n<0){await tg("sendMessage",{chat_id:chatId,text:"Введите сумму ≥ 0."});return true;}
-      setSetting("ref_withdraw_min",Math.round(n)); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`✅ Минимум: ${rub(Math.round(n))}`});
-      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_ref"); return true;
-    }
-    case "wr_reject": {
-      const wrId=Number(row.payload), wr=getWithdrawal(wrId);
-      clearAdminState(aid);
-      if(!wr||wr.status!=="pending"){await render(aid,chatId,user(aid)?.last_menu_id||null,"a_wr");return true;}
-      db.prepare("UPDATE withdrawal_requests SET status='rejected',admin_note=?,updated_at=? WHERE id=?").run(text,now(),wrId);
-      await tg("sendMessage",{chat_id:chatId,text:`❌ Заявка #${wrId} отклонена.`});
-      tg("sendMessage",{chat_id:wr.tg_id,text:`❌ <b>Вывод отклонён</b>\n\nСумма: ${rub(wr.amount_rub)}\nПричина: ${esc(text)}`,parse_mode:"HTML"}).catch(()=>{});
-      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_wr"); return true;
-    }
+
     case "bal_add": {
       const targetId=Number(row.payload), n=Number(text);
       if(!Number.isFinite(n)){await tg("sendMessage",{chat_id:chatId,text:"Введите число."});return true;}
@@ -1546,14 +1468,7 @@ async function handleMessage(msg) {
     await handleCryptoAmount(from.id,chatId,text); return;
   }
 
-  // Payout details
-  if(ustate?.state==="ref_payout_details"&&msg.text&&!msg.text.startsWith("/")){
-    const method=ustate.payload||"";
-    db.prepare("UPDATE users SET payout_method=?,payout_details=?,updated_at=? WHERE tg_id=?").run(method,text,now(),Number(from.id));
-    clearUserState(from.id);
-    await tg("sendMessage",{chat_id:chatId,text:"✅ Реквизиты сохранены.",reply_markup:{remove_keyboard:true}});
-    await render(from.id,chatId,user(from.id)?.last_menu_id||null,"ref"); return;
-  }
+
 
   // ref_withdraw_amount state removed — referral rewards go to main balance directly
 
@@ -1613,14 +1528,7 @@ async function handleMessage(msg) {
       const nb=updateBalance(tid,amt);
       await tg("sendMessage",{chat_id:chatId,text:`✅ Баланс <code>${p[1]}</code>: <b>${rub(nb)}</b>`,parse_mode:"HTML"}); return;
     }
-    if(text.startsWith("/add_ref_balance")){
-      const p=text.split(/\s+/);
-      if(p.length!==3){await tg("sendMessage",{chat_id:chatId,text:"Формат: /add_ref_balance &lt;id&gt; &lt;amount&gt;",parse_mode:"HTML"});return;}
-      const tid=Number(p[1]),amt=Number(p[2]);
-      if(!user(tid)||!Number.isFinite(amt)){await tg("sendMessage",{chat_id:chatId,text:"Неверные параметры."});return;}
-      const nb=updateRefBalance(tid,amt);
-      await tg("sendMessage",{chat_id:chatId,text:`✅ Реф-баланс <code>${p[1]}</code>: <b>${rub(nb)}</b>`,parse_mode:"HTML"}); return;
-    }
+
   }
 
   // Standard commands
@@ -1678,21 +1586,8 @@ async function handleCallback(q) {
   // sub:copy removed (guide button replaces it)
 
   // ── Referral ──────────────────────────────────────────────────────────────
-  if(data==="ref:i"){
-    const u=user(uid);
-    tg("sendMessage",{chat_id:chatId,text:`<code>${refLink(u.ref_code)}</code>`,parse_mode:"HTML"}).catch(()=>{});
-    await ans("Ссылка отправлена ↑"); return;
-  }
-  if(data==="ref:share"){
-    const u=user(uid), link=refLink(u.ref_code);
-    const isRu=getLang(uid)==="ru";
-    const shareText=isRu
-      ? `Привет. Подключись к VPN по моей ссылке:\n\n${link}\n\nРаботает быстро и стабильно.`
-      : `Hey! Connect to VPN using my link:\n\n${link}\n\nFast and reliable.`;
-    // Send as plain text so user can forward it
-    await tg("sendMessage",{chat_id:chatId,text:shareText,reply_markup:{inline_keyboard:[[{text:isRu?"« Назад в рефералы":"« Back to referrals",callback_data:"v:ref"}]]}});
-    await ans(); return;
-  }
+  // ref:i removed — link shown inline in refText
+  // ref:share removed — invite uses t.me/share/url URL button
   if(data==="ref:r"){
     db.prepare("UPDATE users SET ref_code=?,updated_at=? WHERE tg_id=?").run(crypto.randomBytes(5).toString("hex"),now(),uid);
     await render(uid,chatId,msgId,"ref"); await ans("✅"); return;
@@ -1759,7 +1654,7 @@ async function handleCallback(q) {
   }
 
   // ── Admin nav ─────────────────────────────────────────────────────────────
-  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_pay","a:r":"a_ref","a:wr":"a_wr","a:wr_hist":"a_wr_hist","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit"};
+  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_pay","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit"};
   if(adminNav[data]){await render(uid,chatId,msgId,adminNav[data]);await ans();return;}
 
   // ── Admin edit triggers ───────────────────────────────────────────────────
@@ -1802,29 +1697,12 @@ async function handleCallback(q) {
   if(data==="a:pe"){setAdminState(uid,"pay_methods","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст способов пополнения.\n/cancel — отмена."});await ans();return;}
   if(data==="a:guide"){setAdminState(uid,"guide_text","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст инструкции.\nФормат ссылок: [Название|URL]\n/cancel — отмена."});await ans();return;}
   if(data==="a:rp"){setAdminState(uid,"ref_percent","");await tg("sendMessage",{chat_id:chatId,text:`Ставка: ${setting("ref_percent","30")}%\n\nВведите новую (0..100):\n/cancel — отмена.`});await ans();return;}
-  if(data==="a:rm"){setAdminState(uid,"ref_min","");await tg("sendMessage",{chat_id:chatId,text:`Мин. вывод: ${rub(setting("ref_withdraw_min","500"))}\n\nВведите новый (₽):\n/cancel — отмена.`});await ans();return;}
+
   if(data==="a:find"){setAdminState(uid,"find_user","");await tg("sendMessage",{chat_id:chatId,text:"Введите Telegram ID или @username:\n/cancel — отмена."});await ans();return;}
   // DB
   if(data==="a:db_export"){await ans("Формирую файл...");await exportDbToAdmin(chatId);return;}
   if(data==="a:db_import_start"){setAdminState(uid,"db_import_wait","");await ans("Жду файл .db/.sqlite");await tg("sendMessage",{chat_id:chatId,text:"📤 Отправьте SQLite файл документом.\n⚠️ Бот перезапустится после импорта."});return;}
-  // Withdrawal approve
-  if(data.startsWith("a:wr_a:")){
-    const wrId=Number(data.split(":")[2]), wr=getWithdrawal(wrId);
-    if(!wr||wr.status!=="pending"){await ans("Уже обработана.",true);await render(uid,chatId,msgId,"a_wr");return;}
-    const rec=user(wr.tg_id);
-    if(!rec||Number(rec.ref_balance_rub||0)<wr.amount_rub){await ans("Недостаточно реф-средств.",true);return;}
-    db.transaction(()=>{updateRefBalance(wr.tg_id,-wr.amount_rub);db.prepare("UPDATE withdrawal_requests SET status='approved',updated_at=? WHERE id=?").run(now(),wrId);})();
-    await ans("✅ Одобрено");
-    tg("sendMessage",{chat_id:wr.tg_id,text:`✅ <b>Вывод одобрен</b>\n\nСумма: ${rub(wr.amount_rub)}\n${esc(wr.method)}: <code>${esc(wr.details)}</code>`,parse_mode:"HTML"}).catch(()=>{});
-    await render(uid,chatId,msgId,"a_wr"); return;
-  }
-  // Withdrawal reject
-  if(data.startsWith("a:wr_r:")){
-    const wrId=data.split(":")[2], wr=getWithdrawal(Number(wrId));
-    if(!wr||wr.status!=="pending"){await ans("Уже обработана.",true);await render(uid,chatId,msgId,"a_wr");return;}
-    setAdminState(uid,"wr_reject",wrId); await ans();
-    await tg("sendMessage",{chat_id:chatId,text:`Отклонить заявку #${wrId} (${rub(wr.amount_rub)})\n\nВведите причину:\n/cancel — отмена.`}); return;
-  }
+  // Withdrawal callbacks removed
   // Balance add
   if(data.startsWith("a:bal_add:")){
     const targetId=data.split(":")[2], tu=user(Number(targetId));
