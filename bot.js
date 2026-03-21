@@ -53,7 +53,7 @@ const I18N = {
     btn_sub:        "⭐ Моя подписка",
     btn_sub_active: "⭐ Открыть подписку",
     btn_hist:       "🗂 История",
-    btn_other:      "Остальное",
+    btn_other:      "⚙️ Остальное",
     btn_other_topup:"💰 Пополнение",
     btn_other_gift: "🎁 Подарить подписку",
     btn_back_profile:"« Назад в профиль",
@@ -104,7 +104,7 @@ const I18N = {
     // Buy
     buy_title:   "<b>Тарифы VPN</b>",
     buy_balance: (v) => `<blockquote>Ваш баланс: <b>${rub(v)}</b></blockquote>`,
-    buy_active:  "<i>Подписка активна — доступно продление.</i>",
+    buy_active:  "<i>⚠️ Подписка уже активна. Купить новую можно после истечения.</i>",
     buy_new:     "<i>Выберите тариф для оформления.</i>",
     // Topup
     topup_title: "<b>Способы пополнения</b>",
@@ -196,7 +196,7 @@ const I18N = {
     btn_sub:        "⭐ My subscription",
     btn_sub_active: "⭐ Open subscription",
     btn_hist:       "🗂 History",
-    btn_other:      "Other",
+    btn_other:      "⚙️ Other",
     btn_other_topup:"💰 Top up",
     btn_other_gift: "🎁 Gift subscription",
     btn_back_profile:"« Back to profile",
@@ -242,7 +242,7 @@ const I18N = {
     sub_link_hdr:"Subscription link:",
     buy_title:   "<b>VPN Plans</b>",
     buy_balance: (v) => `<blockquote>Your balance: <b>${rub(v)}</b></blockquote>`,
-    buy_active:  "<i>Subscription active — renewal available.</i>",
+    buy_active:  "<i>⚠️ Subscription is active. You can buy a new one after it expires.</i>",
     buy_new:     "<i>Choose a plan to subscribe.</i>",
     topup_title: "<b>Top up methods</b>",
     topup_other: (v) => v || "<i>Other methods not configured.</i>",
@@ -402,12 +402,15 @@ function addReferralReward(buyerId, amount) {
   const pct    = Math.max(0,Math.min(100,Number(setting("ref_percent","30"))||30));
   const reward = Math.floor((Number(amount)*pct)/100);
   if(reward<=0) return;
-  updateRefBalance(r.tg_id, reward);
+  // Reward goes directly to main balance (not separate ref_balance)
+  updateBalance(r.tg_id, reward);
   db.prepare("UPDATE users SET ref_earned=ref_earned+?,updated_at=? WHERE tg_id=?").run(reward,now(),Number(r.tg_id));
   db.prepare("INSERT INTO referrals(referrer_tg_id,invited_tg_id,amount_rub,percent,reward_rub,created_at) VALUES(?,?,?,?,?,?)").run(Number(r.tg_id),Number(buyerId),Number(amount),pct,reward,now());
-  const lang = getLang(r.tg_id);
-  const tx = I18N[lang] || I18N.ru;
-  tg("sendMessage",{chat_id:r.tg_id,text:tx.ref_bonus(pct,reward),parse_mode:"HTML"}).catch(()=>{});
+  const isRu=getLang(r.tg_id)==="ru";
+  const msg=isRu
+    ? `<blockquote>+${rub(reward)} — реферальное вознаграждение ${pct}%</blockquote>`
+    : `<blockquote>+${rub(reward)} — referral bonus ${pct}%</blockquote>`;
+  tg("sendMessage",{chat_id:r.tg_id,text:msg,parse_mode:"HTML"}).catch(()=>{});
 }
 
 function getWithdrawal(id)          { return db.prepare("SELECT * FROM withdrawal_requests WHERE id=?").get(Number(id)); }
@@ -492,7 +495,7 @@ function init() {
   const defaults = [
     ["payment_methods",""],["gif_main_menu",""],["gif_purchase_success",""],["gif_gift_success",""],["gif_broadcast",""],
     ["ref_percent","30"],["ref_withdraw_min","500"],
-    ["guide_text","📋 <b>Инструкция по подключению VPN:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru], [v2RayTun|https://v2raytun.com/] или другие XRay клиенты.\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в клиент.\n3. Всё готово! Теперь вы можете подключиться к защищённому интернету.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/support]"],
+    ["guide_text","📋 <b>Инструкция по подключению VPN:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru], [v2RayTun|https://v2raytun.com/] или другие XRay клиенты.\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в клиент.\n3. Всё готово! Теперь вы можете подключиться к защищённому интернету.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/ke9ab]"],
     // Per-section images (empty = no image)
     ["img_home",""],["img_sub",""],["img_buy",""],["img_bal",""],["img_ref",""],
     ["img_gift",""],["img_guide",""],["img_about",""],["img_topup",""],
@@ -745,7 +748,7 @@ async function buySelf(uid, chatId, msgId, code, mode, cbid) {
     const res=await doPurchase(uid,uid,code,mode);
     await gif(chatId,"gif_purchase_success");
     const me=user(uid), tx=T(uid);
-    const lines=[tx.success_title,"",tx.success_plan(res.tr.title),tx.success_paid(res.tr.price_rub),tx.success_bal(me.balance_rub),tx.success_exp(res.exp),"",`<code>${esc(res.url)}</code>`];
+    const lines=[tx.success_title,"",tx.success_plan(tariffTitle(res.tr,getLang(uid))),tx.success_paid(res.tr.price_rub),tx.success_bal(me.balance_rub),tx.success_exp(res.exp),"",`<code>${esc(res.url)}</code>`];
     const kb={inline_keyboard:[[{text:tx.btn_connect,url:res.url}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]};
     const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("sub"));
     setMenu(uid,chatId,nm);
@@ -760,10 +763,10 @@ async function buySelf(uid, chatId, msgId, code, mode, cbid) {
 
 async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid) {
   const tr=tariff(code); if(!tr){await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
-  const u=user(uid), tx=T(uid), diff=Number(u.balance_rub)-Number(tr.price_rub);
+  const u=user(uid), tx=T(uid), lang=getLang(uid), diff=Number(u.balance_rub)-Number(tr.price_rub);
   const lines=[
     tx.confirm_title(mode),"",
-    tx.confirm_plan(tr.title),
+    tx.confirm_plan(tariffTitle(tr,lang)),
     tx.confirm_price(tr.price_rub),
     tx.confirm_bal(u.balance_rub),
     tx.confirm_after(Math.max(0,diff)),"",
@@ -785,10 +788,11 @@ async function askGiftConfirm(uid, chatId, msgId, code, toId, cbid) {
   if(!to){await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Пользователь не найден",show_alert:true});return;}
   if(Number(u.balance_rub)<Number(tr.price_rub)){await tg("answerCallbackQuery",{callback_query_id:cbid,text:tx.gift_no_bal(tr.price_rub,u.balance_rub),show_alert:true});return;}
   const toName=to.first_name||(to.username?`@${to.username}`:`ID ${to.tg_id}`);
+  const lang=getLang(uid);
   const lines=[
     tx.gift_confirm_title,"",
     tx.gift_to(toName),
-    tx.gift_plan(tr.title),
+    tx.gift_plan(tariffTitle(tr,lang)),
     tx.gift_price(tr.price_rub),
     tx.gift_after(Number(u.balance_rub)-Number(tr.price_rub)),
   ];
@@ -851,16 +855,20 @@ function subKb(uid) {
   const tx=T(uid), s=sub(uid), rows=[];
   if(activeSub(s)){
     rows.push([{text:tx.btn_connect,url:s.sub_url}]);
-    rows.push([{text:tx.btn_copy_link,callback_data:"sub:copy"}]);
+    rows.push([{text:tx.btn_guide,callback_data:"v:guide"}]);
+  } else {
+    // Expired or no sub — show buy button
+    rows.push([{text:tx.btn_buy_sub,callback_data:"v:buy"}]);
   }
-  rows.push([{text:tx.btn_renew,callback_data:"v:buy"},{text:tx.btn_gift_tab,callback_data:"v:gift"}]);
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
 
 function buyKb(uid) {
-  const tx=T(uid), act=activeSub(sub(uid));
-  const rows=tariffs().map(t=>[{text:`${t.title} — ${rub(t.price_rub)}`,callback_data:`${act?"pay:r:":"pay:n:"}${t.code}`}]);
+  const tx=T(uid);
+  // Always "new" purchase — renewal of active sub is blocked in doPurchase
+  const lang=getLang(uid);
+  const rows=tariffs().map(t=>[{text:`${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`pay:n:${t.code}`}]);
   rows.push([{text:tx.btn_back,callback_data:"v:profile"}]);
   return{inline_keyboard:rows};
 }
@@ -880,19 +888,13 @@ function refKb(uid) {
   const min=Number(setting("ref_withdraw_min","500"))||500;
   const link=refLink(u.ref_code);
   const rows=[];
-  // Primary: invite link as external URL button (shows ↗ icon in Telegram)
-  rows.push([{text:tx.btn_invite, url:link}]);
-  // Show withdraw if has balance
-  if(refBal>=min){
-    rows.push([pending
-      ?{text:"⏳ Заявка в обработке",callback_data:"noop"}
-      :{text:tx.btn_withdraw,callback_data:"ref:w"}
-    ]);
-  }
-  // Secondary row: history + settings
+  // Primary: invite — switch_inline_query_chosen_chat for forward sharing
+  // We use callback_data "ref:share" to send the sharable text inline
+  rows.push([{text:tx.btn_invite, callback_data:"ref:share"}]);
+  // History + reset code
   rows.push([
     {text:tx.btn_ref_hist,callback_data:"ref:hist:0"},
-    {text:tx.btn_payout_set,callback_data:"ref:p"},
+    {text:tx.btn_ref_code,callback_data:"ref:r"},
   ]);
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
@@ -910,8 +912,9 @@ function payoutMethodKb(uid) {
 
 function giftKb(uid) {
   const tx=T(uid);
+  const lang=getLang(uid);
   return{inline_keyboard:[
-    ...tariffs().map(t=>[{text:`🎁 ${t.title} — ${rub(t.price_rub)}`,callback_data:`g:p:${t.code}`}]),
+    ...tariffs().map(t=>[{text:`🎁 ${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`g:p:${t.code}`}]),
     [{text:tx.btn_home,callback_data:"v:home"}],
   ]};
 }
@@ -973,10 +976,24 @@ function subText(uid) {
   return [tx.sub_title,"",tx.sub_plan(s.plan_title||s.plan_code||"—"),tx.sub_exp(s.expires_at),tx.sub_left(dd,hh,mm),`<i>${tx.sub_devices}</i>`,"",`${tx.sub_link_hdr}\n<code>${esc(s.sub_url)}</code>`].join("\n");
 }
 
+// Translate tariff title to English if needed
+function tariffTitle(t, lang) {
+  if(lang==="ru") return t.title;
+  // Auto-translate common RU patterns
+  return t.title
+    .replace(/1\s*месяц/i,  "1 month")
+    .replace(/3\s*месяц[а-я]*/i, "3 months")
+    .replace(/6\s*месяц[а-я]*/i, "6 months")
+    .replace(/1\s*год/i,    "1 year")
+    .replace(/2\s*год[а-я]*/i, "2 years")
+    .replace(/месяц[а-я]*/i, "month(s)")
+    .replace(/год[а-я]*/i,   "year");
+}
+
 function buyText(uid) {
-  const tx=T(uid), u=user(uid), act=activeSub(sub(uid));
+  const tx=T(uid), u=user(uid), act=activeSub(sub(uid)), lang=getLang(uid);
   const lines=[tx.buy_title,""];
-  tariffs().forEach(t=>lines.push(`${t.title} — <b>${rub(t.price_rub)}</b>`));
+  tariffs().forEach(t=>lines.push(`${tariffTitle(t,lang)} — <b>${rub(t.price_rub)}</b>`));
   lines.push("",tx.buy_balance(u.balance_rub),"",act?tx.buy_active:tx.buy_new);
   return lines.join("\n");
 }
@@ -994,25 +1011,25 @@ function refText(uid) {
   const tx=T(uid), u=user(uid), isRu=getLang(uid)==="ru";
   const st=db.prepare("SELECT COUNT(*) c, COALESCE(SUM(reward_rub),0) s FROM referrals WHERE referrer_tg_id=?").get(Number(uid));
   const pct=Number(setting("ref_percent","30"))||30;
-  const refBal=Number(u.ref_balance_rub||0);
+  const totalEarned=Number(u.ref_earned||0); // lifetime earnings credited to main balance
   const link=refLink(u.ref_code);
   const lines=[
     tx.ref_title,"",
-    // ref link in blockquote with copy hint
-    `<blockquote>${link}</blockquote>`,
+    // ref link in blockquote (monospace = tap to copy on mobile)
+    `<blockquote><code>${link}</code></blockquote>`,
     isRu?"<i>(Нажмите, чтобы скопировать)</i>":"<i>(Tap to copy)</i>","",
     // stats
-    tx.ref_invited(st.c||0),
-    `${isRu?"Заработано":"Earned"}: <b>${Number(st.s||0).toFixed(2)}₽</b>`,"",
-    // promo block
+    isRu?`Приглашено: <b>${st.c||0}</b>`:`Invited: <b>${st.c||0}</b>`,
+    isRu?`Заработано: <b>${totalEarned.toFixed(2)}₽</b>`:`Earned: <b>${totalEarned.toFixed(2)}₽</b>`,"",
+    // promo block — reward credited to main balance
     isRu?[
       "⭐ <b>Это выгодно!</b>",
-      `<i>${pct}% от каждой покупки подписки</i>`,
-      `<i>Реф. баланс: <b>${refBal.toFixed(2)}₽</b></i>`,
+      `<i>${pct}% от каждой покупки подписки реферала</i>`,
+      `<i>Начисляется на основной баланс</i>`,
     ].join("\n"):[
       "⭐ <b>Great deal!</b>",
-      `<i>${pct}% from every subscription purchase</i>`,
-      `<i>Ref balance: <b>${refBal.toFixed(2)}₽</b></i>`,
+      `<i>${pct}% from every referral's subscription purchase</i>`,
+      `<i>Credited to your main balance</i>`,
     ].join("\n"),
   ];
   return lines.join("\n");
@@ -1538,21 +1555,7 @@ async function handleMessage(msg) {
     await render(from.id,chatId,user(from.id)?.last_menu_id||null,"ref"); return;
   }
 
-  // Withdrawal amount
-  if(ustate?.state==="ref_withdraw_amount"){
-    const amount=Math.round(Number(text.replace(/[^\d.]/g,""))||0);
-    const u=user(from.id), tx=T(from.id);
-    const min=Number(setting("ref_withdraw_min","500"))||500, refBal=Number(u?.ref_balance_rub||0);
-    if(!amount||amount<=0){await tg("sendMessage",{chat_id:chatId,text:"Введите сумму."});return;}
-    if(amount<min){await tg("sendMessage",{chat_id:chatId,text:`❌ Минимум: ${rub(min)}. Баланс: ${rub(refBal)}`});return;}
-    if(amount>refBal){await tg("sendMessage",{chat_id:chatId,text:`❌ Недостаточно средств. Баланс: ${rub(refBal)}`});return;}
-    clearUserState(from.id);
-    db.prepare("INSERT INTO withdrawal_requests(tg_id,amount_rub,method,details,status,admin_note,created_at,updated_at) VALUES(?,?,?,?,'pending','',?,?)").run(Number(from.id),amount,u.payout_method,u.payout_details,now(),now());
-    await tg("sendMessage",{chat_id:chatId,text:`✅ <b>Заявка создана</b>\n\nСумма: <b>${rub(amount)}</b>\n${esc(u.payout_method)}`,parse_mode:"HTML",reply_markup:{remove_keyboard:true}});
-    const pCount=pendingWithdrawals().length;
-    tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Заявка на вывод</b>`,"",`${esc(u.first_name||u.username||String(from.id))} (<code>${from.id}</code>)`,`Сумма: <b>${rub(amount)}</b>`,`Метод: ${esc(u.payout_method)}`,`<code>${esc(u.payout_details)}</code>`,"",`В очереди: ${pCount}`].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:"Открыть заявки",callback_data:"a:wr"}]]}}).catch(()=>{});
-    await render(from.id,chatId,user(from.id)?.last_menu_id||null,"ref"); return;
-  }
+  // ref_withdraw_amount state removed — referral rewards go to main balance directly
 
   // Gift recipient ID entry
   if(ustate?.state==="gift_recipient_id"){
@@ -1665,19 +1668,14 @@ async function handleCallback(q) {
 
   // ── Purchase ──────────────────────────────────────────────────────────────
   if(data.startsWith("pay:n:")){await askBuyConfirm(uid,chatId,msgId,data.split(":")[2],"new",q.id);return;}
-  if(data.startsWith("pay:r:")){await askBuyConfirm(uid,chatId,msgId,data.split(":")[2],"renew",q.id);return;}
+  // pay:r: (renew while active) removed from UI
   if(data.startsWith("pay:c:")){const[,,mode,code]=data.split(":");await buySelf(uid,chatId,msgId,code,mode,q.id);return;}
 
   // ── Purchase history ──────────────────────────────────────────────────────
   if(data.startsWith("ph:")){await render(uid,chatId,msgId,"purchases",{page:Number(data.split(":")[1]||0)});await ans();return;}
 
   // ── Subscription ──────────────────────────────────────────────────────────
-  if(data==="sub:copy"){
-    const s=sub(uid);
-    if(activeSub(s)){tg("sendMessage",{chat_id:chatId,text:`<code>${esc(s.sub_url)}</code>`,parse_mode:"HTML"}).catch(()=>{});await ans("Ссылка отправлена ↑");}
-    else{await ans("Нет активной подписки.",true);}
-    return;
-  }
+  // sub:copy removed (guide button replaces it)
 
   // ── Referral ──────────────────────────────────────────────────────────────
   if(data==="ref:i"){
@@ -1685,28 +1683,24 @@ async function handleCallback(q) {
     tg("sendMessage",{chat_id:chatId,text:`<code>${refLink(u.ref_code)}</code>`,parse_mode:"HTML"}).catch(()=>{});
     await ans("Ссылка отправлена ↑"); return;
   }
+  if(data==="ref:share"){
+    const u=user(uid), link=refLink(u.ref_code);
+    const isRu=getLang(uid)==="ru";
+    const shareText=isRu
+      ? `Привет. Подключись к VPN по моей ссылке:\n\n${link}\n\nРаботает быстро и стабильно.`
+      : `Hey! Connect to VPN using my link:\n\n${link}\n\nFast and reliable.`;
+    // Send as plain text so user can forward it
+    await tg("sendMessage",{chat_id:chatId,text:shareText,reply_markup:{inline_keyboard:[[{text:isRu?"« Назад в рефералы":"« Back to referrals",callback_data:"v:ref"}]]}});
+    await ans(); return;
+  }
   if(data==="ref:r"){
     db.prepare("UPDATE users SET ref_code=?,updated_at=? WHERE tg_id=?").run(crypto.randomBytes(5).toString("hex"),now(),uid);
     await render(uid,chatId,msgId,"ref"); await ans("✅"); return;
   }
-  if(data==="ref:p"){await render(uid,chatId,msgId,"ref_payout");await ans();return;}
-  if(data.startsWith("ref:pm:")){
-    const map={card:"Карта (RU)",usdt_trc20:"USDT (TRC20)",sbp:"СБП"};
-    const method=map[data.split(":")[2]]||"Другое";
-    setUserState(uid,"ref_payout_details",method); await ans();
-    await tg("sendMessage",{chat_id:chatId,text:`Метод: <b>${esc(method)}</b>\n\nВведите реквизиты:`,parse_mode:"HTML",reply_markup:{keyboard:[[{text:"Отмена"}]],resize_keyboard:true,one_time_keyboard:true}});
-    return;
-  }
+  // ref:p removed — no payout settings needed
+  // ref:pm: removed — no payout method needed
   if(data.startsWith("ref:hist:")){await render(uid,chatId,msgId,"ref_hist",{page:Number(data.split(":")[2]||0)});await ans();return;}
-  if(data==="ref:w"){
-    const u=user(uid),tx=T(uid),min=Number(setting("ref_withdraw_min","500"))||500,refBal=Number(u.ref_balance_rub||0);
-    if(!u.payout_method||!u.payout_details){await ans("Сначала укажите способ вывода.",true);await render(uid,chatId,msgId,"ref_payout");return;}
-    if(userPendingWithdrawal(uid)){await ans("У вас уже есть заявка.",true);return;}
-    if(refBal<min){await ans(`Минимум: ${rub(min)}. Баланс: ${rub(refBal)}`,true);return;}
-    setUserState(uid,"ref_withdraw_amount",""); await ans();
-    await tg("sendMessage",{chat_id:chatId,text:[tx.withdraw_title,"",tx.withdraw_bal(refBal),tx.withdraw_min(min),"",tx.withdraw_enter].join("\n"),parse_mode:"HTML",reply_markup:{keyboard:[[{text:String(refBal)},{text:"Отмена"}]],resize_keyboard:true,one_time_keyboard:true}});
-    return;
-  }
+  // ref:w removed — referral rewards go to main balance directly
 
   // ── Gifts ─────────────────────────────────────────────────────────────────
   if(data.startsWith("g:p:")){
