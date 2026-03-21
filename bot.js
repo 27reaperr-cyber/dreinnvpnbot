@@ -138,7 +138,7 @@ const I18N = {
     buy_title:   "<b>Тарифы VPN</b>",
     buy_balance: (v) => `<blockquote>Ваш баланс: <b>${rub(v)}</b></blockquote>`,
     buy_active:  "<i>⚠️ Подписка уже активна. Купить новую можно после истечения.</i>",
-    buy_trial_active: "<i>✅ Пробный период активен. Купите тариф — дни прибавятся к текущему сроку.</i>",
+    buy_trial_active: "<i>✅ Пробный период активен. Купить тариф можно прямо сейчас — пробный будет заменён.</i>",
     buy_new:     "<i>Выберите тариф для оформления.</i>",
     // Topup
     topup_title: "<b>Способы пополнения</b>",
@@ -294,7 +294,7 @@ const I18N = {
     buy_title:   "<b>VPN Plans</b>",
     buy_balance: (v) => `<blockquote>Your balance: <b>${rub(v)}</b></blockquote>`,
     buy_active:  "<i>⚠️ Subscription is active. You can buy a new one after it expires.</i>",
-    buy_trial_active: "<i>✅ Free trial is active. Buy a plan — days will be added to your current expiry.</i>",
+    buy_trial_active: "<i>✅ Free trial is active. You can buy a plan now — the trial will be replaced.</i>",
     buy_new:     "<i>Choose a plan to subscribe.</i>",
     topup_title: "<b>Top up methods</b>",
     topup_other: (v) => v || "<i>Other methods not configured.</i>",
@@ -886,8 +886,8 @@ async function doPurchase(payerId, receiverId, code, kind) {
     const base = (s && s.expires_at > now()) ? s.expires_at : now();
     newExpiresAt = base + tr.duration_days * 86400000;
   } else if (kind==="new" && receiverHasTrial) {
-    // Buying a paid plan while trial is still active → extend from trial expiry
-    newExpiresAt = s.expires_at + tr.duration_days * 86400000;
+    // Buying a paid plan while trial is active → start fresh from now (trial is replaced)
+    newExpiresAt = now() + tr.duration_days * 86400000;
   } else {
     newExpiresAt = Number(api.subscription?.expiresAt || api.expiresAt || (now() + tr.duration_days*86400000));
   }
@@ -928,8 +928,8 @@ async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid) {
   const trialActive=isTrialSub(uid);
   const extendNote = trialActive
     ? (lang==="en"
-        ? `<i>📌 Days add to your trial expiry: ${dt(sub(uid).expires_at + tr.duration_days*86400000)}</i>`
-        : `<i>📌 Дни прибавятся к пробному сроку: ${dt(sub(uid).expires_at + tr.duration_days*86400000)}</i>`)
+        ? `<i>⚠️ Your free trial will be replaced. New expiry: ${dt(now() + tr.duration_days*86400000)}</i>`
+        : `<i>⚠️ Пробный период будет заменён. Новый срок: ${dt(now() + tr.duration_days*86400000)}</i>`)
     : null;
   const lines=[
     tx.confirm_title(mode),"",
@@ -1466,7 +1466,12 @@ async function render(uid, chatId, msgId, view, data={}) {
       const tu=user(data.id);
       if(!tu){text="Пользователь не найден.";kb={inline_keyboard:[[{text:"« Назад",callback_data:"a:main"}]]};break;}
       text=adminUserInfoText(tu);
-      kb={inline_keyboard:[[{text:"➕ Пополнить баланс",callback_data:`a:bal_add:${tu.tg_id}`}],[{text:"✏️ Ред. подписку",callback_data:`a:sub_edit:${tu.tg_id}`}],[{text:"« Назад",callback_data:"a:main"}]]};
+      const ts=sub(tu.tg_id), hasSub=ts&&activeSub(ts);
+      kb={inline_keyboard:[
+        [{text:"➕ Пополнить баланс",callback_data:`a:bal_add:${tu.tg_id}`}],
+        ...(hasSub?[[{text:"🚫 Отобрать подписку",callback_data:`a:sub_revoke:${tu.tg_id}`}]]:[]),
+        [{text:"« Назад",callback_data:"a:main"}],
+      ]};
       break;
     }
     case "a_channel": {
@@ -2063,10 +2068,26 @@ async function handleCallback(q) {
     setAdminState(uid,"bal_add",targetId); await ans();
     await tg("sendMessage",{chat_id:chatId,text:`Пополнение для ${esc(tu?.first_name||targetId)}\nБаланс: ${rub(tu?.balance_rub)}\n\nВведите сумму (отрицательная = списание):\n/cancel — отмена.`}); return;
   }
-  // Sub edit for user (admin can manually update expiry)
-  if(data.startsWith("a:sub_edit:")){
-    const targetId=data.split(":")[2], ts=sub(Number(targetId));
-    await ans(ts?`Подписка до: ${dt(ts.expires_at)}`:"Нет подписки",true); return;
+  // Sub revoke: deactivate subscription immediately
+  if(data.startsWith("a:sub_revoke:")){
+    const targetId=Number(data.split(":")[2]);
+    const ts=sub(targetId);
+    if(!ts||!activeSub(ts)){await ans("Активной подписки нет.",true);return;}
+    // Deactivate: set is_active=0 and expires_at=now so it's expired immediately
+    db.prepare("UPDATE subscriptions SET is_active=0,expires_at=?,updated_at=? WHERE tg_id=?")
+      .run(now()-1,now(),targetId);
+    await ans("✅ Подписка отозвана.");
+    // Notify the user
+    const tu=user(targetId);
+    const isRuTarget=getLang(targetId)==="ru";
+    tg("sendMessage",{
+      chat_id:targetId,
+      text:isRuTarget
+        ?"<b>Ваша подписка была деактивирована администратором.</b>\n\n<i>Свяжитесь с поддержкой для уточнения деталей.</i>"
+        :"<b>Your subscription has been deactivated by the administrator.</b>\n\n<i>Contact support for details.</i>",
+      parse_mode:"HTML",
+    }).catch(()=>{});
+    await render(uid,chatId,msgId,"a_user_info",{id:targetId}); return;
   }
 
   await ans("Неизвестная команда");
