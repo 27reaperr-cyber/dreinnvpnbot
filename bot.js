@@ -120,7 +120,7 @@ const I18N = {
     // Home
     home_title:  (name) => `🐸 Привет, ${esc(name||"")}`,
     home_info:   (id, bal) => `<blockquote>— Ваш ID: <code>${id}</code>\n— Ваш баланс: <b>${rub(bal)}</b></blockquote>`,
-    home_footer: `Канал — @DreinnVPN\nТех. поддержка — @DreinnVPNSupportBot`,
+    home_footer: `Канал — @DreinnVPN\nПоддержка — @DreinnVPNSupportBot`,
     home_balance:(bal) => `<blockquote>Баланс: <b>${rub(bal)}</b></blockquote>`,
     home_sub_ok: (days) => `<i>Подписка активна — осталось ${days} дн.</i>`,
     // Profile
