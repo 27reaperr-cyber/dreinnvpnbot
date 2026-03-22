@@ -118,7 +118,9 @@ const I18N = {
     lang_ru:     "🇷🇺 Русский",
     lang_en:     "🇬🇧 English",
     // Home
-    home_title:  (name) => `<b>${esc(name||"")}</b>`,
+    home_title:  (name) => `🐸 Привет, ${esc(name||"")}`,
+    home_info:   (id, bal) => `<blockquote>— Ваш ID: <code>${id}</code>\n— Ваш баланс: <b>${rub(bal)}</b></blockquote>`,
+    home_footer: `Канал — @DreinnVPN\nТех. поддержка — @DreinnVPNSupportBot`,
     home_balance:(bal) => `<blockquote>Баланс: <b>${rub(bal)}</b></blockquote>`,
     home_sub_ok: (days) => `<i>Подписка активна — осталось ${days} дн.</i>`,
     // Profile
@@ -277,7 +279,9 @@ const I18N = {
     lang_current:"Current language",
     lang_ru:     "🇷🇺 Русский",
     lang_en:     "🇬🇧 English",
-    home_title:  (name) => `<b>${esc(name||"")}</b>`,
+    home_title:  (name) => `🐸 Hello, ${esc(name||"")}`,
+    home_info:   (id, bal) => `<blockquote>— Your ID: <code>${id}</code>\n— Your balance: <b>${rub(bal)}</b></blockquote>`,
+    home_footer: `Channel — @DreinnVPN\nSupport — @DreinnVPNSupportBot`,
     home_balance:(bal) => `<blockquote>Balance: <b>${rub(bal)}</b></blockquote>`,
     home_sub_ok: (days) => `<i>Subscription active — ${days} days left</i>`,
     prof_title:  "<b>Profile</b>",
@@ -1129,8 +1133,14 @@ function back(uid,t="v:home"){ return{inline_keyboard:[[{text:T(uid).btn_back,ca
 // ─────────────────────────────────────────────────────────────────────────────
 function homeText(u) {
   const tx=T(u.tg_id), s=sub(u.tg_id), hasSub=activeSub(s);
-  const lines=[tx.home_title(u.first_name||""),"",tx.home_balance(u.balance_rub)];
-  if(hasSub){const dd=Math.floor(Math.max(0,s.expires_at-now())/86400000);lines.push(tx.home_sub_ok(dd));}
+  const lines=[
+    tx.home_title(u.first_name||""),
+    "",
+    tx.home_info(u.tg_id, u.balance_rub),
+    "",
+    tx.home_footer,
+  ];
+  if(hasSub){const dd=Math.floor(Math.max(0,s.expires_at-now())/86400000);lines.push("",tx.home_sub_ok(dd));}
   return lines.join("\n");
 }
 
@@ -1499,6 +1509,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       ]};
       break;
     }
+    case "a_guide_edit":
       text=[
         "<b>Инструкция по подключению</b>",
         "",
