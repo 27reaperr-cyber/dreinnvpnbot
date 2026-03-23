@@ -238,7 +238,7 @@ const I18N = {
     crypto_ttl:    "<i>Счёт действителен 1 час.</i>",
     crypto_ok:     (v) => `<b>Зачислено ${rub(v)}</b>`,
     // FreeKassa
-    fk_title:      "<b>Пополнение через FreeKassa</b>",
+    fk_title:      (method) => `<b>Пополнение через ${esc(method || "выбранный способ")}</b>`,
     fk_enter:      "Введите сумму в рублях:",
     fk_min:        (v) => `Минимум: <b>${rub(v)}</b>`,
     fk_created:    "<b>Счёт создан</b>",
@@ -399,7 +399,7 @@ const I18N = {
     crypto_ttl:    "<i>Invoice valid for 1 hour.</i>",
     crypto_ok:     (v) => `<b>Credited ${rub(v)}</b>`,
     // FreeKassa
-    fk_title:      "<b>Top up via FreeKassa</b>",
+    fk_title:      (method) => `<b>Top up via ${esc(method || "selected method")}</b>`,
     fk_enter:      "Enter amount in rubles:",
     fk_min:        (v) => `Minimum: <b>${rub(v)}</b>`,
     fk_created:    "<b>Invoice created</b>",
@@ -1363,7 +1363,6 @@ function topupKb(uid) {
     rows.push([{text:tx.btn_pay_card,callback_data:"fk:start:36"}]);
     rows.push([{text:tx.btn_pay_sber,callback_data:"fk:start:43"}]);
   }
-  rows.push([{text:tx.btn_pay_other,callback_data:"v:pay_other"}]);
   rows.push([{text:tx.btn_back,callback_data:"v:profile"}]);
   return{inline_keyboard:rows};
 }
@@ -1475,11 +1474,10 @@ function buyText(uid) {
 }
 
 function topupText(uid) {
-  const tx=T(uid), other=setting("payment_methods","");
+  const tx=T(uid);
   const rate=_rateCache.val;
   const lines=[tx.topup_title,""];
   if(CRYPTOBOT_TOKEN) lines.push(`<blockquote>USDT • ${tx.crypto_rate(rate)}</blockquote>`,"");
-  lines.push(tx.topup_other(other));
   return lines.join("\n");
 }
 
@@ -1671,10 +1669,6 @@ async function render(uid, chatId, msgId, view, data={}) {
       text=topupText(uid); kb=topupKb(uid); photo=viewImg("topup");
       break;
     }
-    case "pay_other":
-      text=`${tx.topup_title}\n\n${parseLinks(setting("payment_methods","<i>Не настроено.</i>"))}`;
-      kb={inline_keyboard:[[{text:tx.btn_back,callback_data:"v:topup"}]]}; photo="";
-      break;
     case "guide": {
       const lang=getLang(uid);
       const rawGuide = lang==="en"
@@ -1735,7 +1729,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb={inline_keyboard:[
         [{text:"💸 Тарифы",callback_data:"a:t"},{text:"🎞 GIF-анимации",callback_data:"a:g"}],
         [{text:"📨 Рассылка",callback_data:"a:b"},{text:"🔗 Ссылки",callback_data:"a:links"}],
-        [{text:"🖼 Изображения",callback_data:"a:imgs"},{text:"💰 Текст пополнения",callback_data:"a:p"}],
+        [{text:"🖼 Изображения",callback_data:"a:imgs"}],
         [{text:"🤝 Реф. процент",callback_data:"a:r"},{text:"📋 Инструкция",callback_data:"a:guide_edit"}],
         [{text:"📢 Канал + Пробный период",callback_data:"a:channel"}],
         [{text:"💳 FreeKassa",callback_data:"a:fk"}],
@@ -1775,10 +1769,6 @@ async function render(uid, chatId, msgId, view, data={}) {
     case "a_bcast":
       text="<b>Рассылка</b>\n\nОтправьте любое сообщение: текст (с форматированием), фото, видео, GIF, документ или голосовое. Форматирование и медиа сохраняются автоматически.\n\n<i>Задержка 35 мс/сообщение для соблюдения лимитов Telegram.</i>";
       kb={inline_keyboard:[[{text:"✏️ Создать рассылку",callback_data:"a:bs"}],[{text:"« Назад",callback_data:"a:main"}]]};
-      break;
-    case "a_pay":
-      text=`<b>Текст «Других способов пополнения»</b>\n\n<blockquote>${esc(setting("payment_methods","Пока пусто."))}</blockquote>`;
-      kb={inline_keyboard:[[{text:"✏️ Изменить",callback_data:"a:pe"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_ref":
       text=["<b>Реф. процент</b>","",`Ставка: <b>${setting("ref_percent","30")}%</b>`,`<i>Начисляется на основной баланс пользователя при покупке реферала.</i>`].join("\n");
@@ -1898,10 +1888,9 @@ async function startFkTopup(uid, chatId, methodId) {
   const method = Number(methodId);
   const minRub = fkMinRub();
   setUserState(uid, "topup_fk_amount", String(method));
+  const methodName = methodTitle(method, getLang(uid));
   const text = [
-    tx.fk_title,
-    "",
-    `<b>${esc(methodTitle(method, getLang(uid)))}</b>`,
+    tx.fk_title(methodName),
     tx.fk_min(minRub),
     "",
     tx.fk_enter,
@@ -1919,7 +1908,7 @@ async function handleFkAmount(uid, chatId, text, methodId) {
   const minRub = fkMinRub();
   const serverIp = fkServerIp();
   if (!isFkEnabled()) {
-    await tg("sendMessage", { chat_id: chatId, text: "❌ FreeKassa не настроена." });
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Способ пополнения временно недоступен." });
     return;
   }
   const amount = Math.round(parseFloat(String(text).replace(/[^\d.]/g, "")) || 0);
@@ -1938,11 +1927,11 @@ async function handleFkAmount(uid, chatId, text, methodId) {
   try {
     order = await createFkOrder({ uid, amountRub: amount, methodId, email, ip: serverIp });
   } catch (e) {
-    await tg("sendMessage", { chat_id: chatId, text: `❌ FreeKassa: ${esc(e.message)}`, parse_mode: "HTML" });
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Не удалось создать счёт. Попробуйте позже." });
     return;
   }
   if (!order.location) {
-    await tg("sendMessage", { chat_id: chatId, text: "❌ FreeKassa не вернула ссылку оплаты." });
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Не удалось получить ссылку оплаты. Попробуйте позже." });
     return;
   }
   const fkId = createFkPaymentRow(uid, amount, Number(methodId), order.paymentId, order.location, order.orderId);
@@ -2027,11 +2016,6 @@ async function handleAdminState(msg) {
       await tg("sendMessage",{chat_id:chatId,text:"✅ Ссылка обновлена."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_links"); return true;
     }
-    case "pay_methods":
-      setSetting("payment_methods",text); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"✅ Текст пополнения обновлён."});
-      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_pay"); return true;
-
     case "guide_text":
       setSetting("guide_text",text); clearAdminState(aid);
       await tg("sendMessage",{chat_id:chatId,text:"✅ Инструкция (RU) обновлена."});
@@ -2337,7 +2321,7 @@ async function handleCallback(q) {
   // ── Navigation ────────────────────────────────────────────────────────────
   const navMap={
     "v:home":"home","v:profile":"profile","v:sub":"sub","v:buy":"buy",
-    "v:topup":"topup","v:pay_other":"pay_other","v:ref":"ref","v:guide":"guide",
+    "v:topup":"topup","v:pay_other":"topup","v:ref":"ref","v:guide":"guide",
     "v:about":"about","v:gift":"gift","v:lang":"lang","v:other":"other",
   };
   if(navMap[data]){await render(uid,chatId,msgId,navMap[data]);await ans();return;}
@@ -2417,7 +2401,7 @@ async function handleCallback(q) {
     await ans(); await startCryptoTopup(uid,chatId); return;
   }
   if(data.startsWith("fk:start:")){
-    if(!isFkEnabled()){await ans("FreeKassa не настроена.",true);return;}
+    if(!isFkEnabled()){await ans("Способ пополнения временно недоступен.",true);return;}
     const methodId=Number(data.split(":")[2]||44);
     if(![44,36,43].includes(methodId)){await ans("Неверный метод оплаты.",true);return;}
     await ans();
@@ -2438,7 +2422,11 @@ async function handleCallback(q) {
       await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.crypto_ok(cp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
       tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Crypto пополнение</b>`,"",`${esc(me.first_name||String(uid))} (<code>${uid}</code>)`,`Сумма: <b>${rub(cp.amount_rub)}</b>  (${cp.amount_usdt} USDT @ ${Number(cp.rate_rub).toFixed(2)} ₽)`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
     }else{
-      await tg("answerCallbackQuery",{callback_query_id:q.id,text:"❌ Оплата не найдена. Попробуйте через минуту.",show_alert:true}).catch(()=>{});
+      await tg("sendMessage",{
+        chat_id:chatId,
+        text:"❌ Оплата пока не найдена. Попробуйте проверить снова через минуту.",
+        reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`cp:check:${cpId}`}],[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}
+      }).catch(()=>{});
     }
     return;
   }
@@ -2460,7 +2448,11 @@ async function handleCallback(q) {
       const ord=await checkFkOrderByPaymentId(fp.payment_id);
       const paidStatus=ord && (Number(ord.status)===1 || String(ord.status||"").toLowerCase()==="paid");
       if(!paidStatus){
-        await tg("answerCallbackQuery",{callback_query_id:q.id,text:"❌ Оплата пока не найдена. Попробуйте позже.",show_alert:true}).catch(()=>{});
+        await tg("sendMessage",{
+          chat_id:chatId,
+          text:"❌ Оплата пока не найдена. Попробуйте проверить снова через минуту.",
+          reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`fk:check:${fpId}`}],[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}
+        }).catch(()=>{});
         return;
       }
       const credit=await creditFkPaymentByPaymentId(fp.payment_id, ord.id || ord.orderId || null, ord.amount || null);
@@ -2485,7 +2477,7 @@ async function handleCallback(q) {
   }
 
   // ── Admin nav ─────────────────────────────────────────────────────────────
-  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_pay","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk"};
+  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_main","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk"};
   if(adminNav[data]){await render(uid,chatId,msgId,adminNav[data]);await ans();return;}
 
   // ── Channel / trial admin actions ─────────────────────────────────────────
@@ -2594,9 +2586,9 @@ async function handleCallback(q) {
     await ans("Отменено.");
     await render(uid,chatId,msgId,"a_bcast"); return;
   }
-  if(data==="a:pe"){setAdminState(uid,"pay_methods","");await tg("sendMessage",{chat_id:chatId,text:"Отправьте текст способов пополнения.\n/cancel — отмена."});await ans();return;}
   if(data==="a:guide_ru"){setAdminState(uid,"guide_text","");await tg("sendMessage",{chat_id:chatId,text:"🇷🇺 Отправьте текст инструкции на русском.\nФормат ссылок: [Название|URL]\n/cancel — отмена."});await ans();return;}
   if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await tg("sendMessage",{chat_id:chatId,text:"🇬🇧 Send the guide text in English.\nLink format: [Label|URL]\n/cancel — cancel."});await ans();return;}
+  if(data==="a:pe"){await ans("Раздел удален.",true);await render(uid,chatId,msgId,"a_main");return;}
   if(data==="a:rp"){setAdminState(uid,"ref_percent","");await tg("sendMessage",{chat_id:chatId,text:`Ставка: ${setting("ref_percent","30")}%\n\nВведите новую (0..100):\n/cancel — отмена.`});await ans();return;}
 
   if(data==="a:find"){setAdminState(uid,"find_user","");await tg("sendMessage",{chat_id:chatId,text:"Введите Telegram ID или @username:\n/cancel — отмена."});await ans();return;}
