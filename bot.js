@@ -31,7 +31,7 @@ const FK_API_BASE      = "https://api.fk.life/v1";
 const FK_SHOP_ID_ENV   = Number(process.env.FREEKASSA_SHOP_ID || 0);
 const FK_API_KEY       = process.env.FREEKASSA_API_KEY || "";
 const FK_SECRET2       = process.env.FREEKASSA_SECRET2 || "";
-const FK_SERVER_IP     = process.env.FREEKASSA_SERVER_IP || "";
+const FK_SERVER_IP_ENV = process.env.FREEKASSA_SERVER_IP || "";
 const FK_DOMAIN        = process.env.FREEKASSA_DOMAIN || "dreinn.bothost.tech";
 const FK_PORT          = Number(process.env.PORT || process.env.FREEKASSA_PORT || 3000);
 const FK_PATH_NOTIFY_ENV = process.env.FREEKASSA_NOTIFY_PATH || "/freekassa/notify";
@@ -49,7 +49,7 @@ if (!TOKEN || !API || !APP_SECRET || !ADMIN_ID) {
   process.exit(1);
 }
 if (!FK_API_KEY || !FK_SECRET2) console.warn("[FreeKassa] API key/secret2 missing. FreeKassa is disabled.");
-if ((!FK_SERVER_IP || FK_SERVER_IP === "127.0.0.1")) {
+if ((!FK_SERVER_IP_ENV || FK_SERVER_IP_ENV === "127.0.0.1")) {
   console.warn("[FreeKassa] FREEKASSA_SERVER_IP is empty/localhost. createOrder can fail due to IP validation.");
 }
 
@@ -450,6 +450,23 @@ function fkNotifyPath() {
   return p.replace(/\s+/g, "");
 }
 function isFkEnabled()       { return !!(fkShopId() > 0 && FK_API_KEY && FK_SECRET2); }
+function isValidPublicIpv4(ip) {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(String(ip || ""))) return false;
+  const p = String(ip).split(".").map((x) => Number(x));
+  if (p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  if (p[0] === 10 || p[0] === 127 || p[0] === 0) return false;
+  if (p[0] === 169 && p[1] === 254) return false;
+  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return false;
+  if (p[0] === 192 && p[1] === 168) return false;
+  return true;
+}
+function fkServerIp() {
+  const fromDb = String(setting("fk_server_ip", "") || "").trim();
+  if (isValidPublicIpv4(fromDb)) return fromDb;
+  const fromEnv = String(FK_SERVER_IP_ENV || "").trim();
+  if (isValidPublicIpv4(fromEnv)) return fromEnv;
+  return "";
+}
 
 // Configurable links (fallback to env / hardcoded defaults)
 // Normalize: @username → https://t.me/username, bare username → same
@@ -626,6 +643,7 @@ function init() {
   ssNew.run("fk_shop_id", String(FK_SHOP_ID_ENV || ""));
   ssNew.run("fk_min_rub", String(FK_MIN_RUB_ENV || 50));
   ssNew.run("fk_notify_path", FK_PATH_NOTIFY_ENV || "/freekassa/notify");
+  ssNew.run("fk_server_ip", String(FK_SERVER_IP_ENV || ""));
 
   // Seed tariffs
   const st = db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(code) DO NOTHING");
@@ -650,6 +668,7 @@ function init() {
     ["fk_shop_id", String(FK_SHOP_ID_ENV || "")],
     ["fk_min_rub", String(FK_MIN_RUB_ENV || 50)],
     ["fk_notify_path", FK_PATH_NOTIFY_ENV || "/freekassa/notify"],
+    ["fk_server_ip", String(FK_SERVER_IP_ENV || "")],
     // Configurable links
     ["url_support","https://t.me/dreinnvpnsupportbot"],["url_privacy",""],["url_terms",""],["url_proxy",""],["url_news",""],["url_status","https://dreinnvpn.vercel.app"],
   ];
@@ -816,6 +835,38 @@ function methodTitle(i, lang) {
   const ru = { 44: "СБП (QR)", 36: "Банковская карта РФ", 43: "SberPay" };
   const en = { 44: "SBP (QR)", 36: "Russian bank card", 43: "SberPay" };
   return (lang === "en" ? en : ru)[Number(i)] || `i=${i}`;
+}
+async function detectPublicIpv4() {
+  const probes = [
+    { url: "https://api.ipify.org?format=json", parse: (t) => { try { return JSON.parse(t).ip || ""; } catch { return ""; } } },
+    { url: "https://ifconfig.me/ip", parse: (t) => String(t || "").trim() },
+    { url: "https://ipv4.icanhazip.com", parse: (t) => String(t || "").trim() },
+  ];
+  for (const p of probes) {
+    try {
+      const r = await fetch(p.url, { signal: AbortSignal.timeout(5000) });
+      if (!r.ok) continue;
+      const txt = await r.text();
+      const ip = p.parse(txt);
+      if (isValidPublicIpv4(ip)) return ip;
+    } catch {}
+  }
+  return "";
+}
+async function ensureFkServerIp() {
+  const existing = fkServerIp();
+  if (existing) {
+    setSetting("fk_server_ip", existing);
+    return existing;
+  }
+  const detected = await detectPublicIpv4();
+  if (detected) {
+    setSetting("fk_server_ip", detected);
+    console.log(`[FreeKassa] Auto-detected external IP: ${detected}`);
+    return detected;
+  }
+  console.warn("[FreeKassa] Failed to auto-detect external IP.");
+  return "";
 }
 function createFkPaymentRow(tgId, amountRub, methodId, paymentId, location, fkOrderId = null) {
   return db
@@ -1558,6 +1609,7 @@ function adminFkText() {
   const sid = fkShopId();
   const min = fkMinRub();
   const path = fkNotifyPath();
+  const ip = fkServerIp();
   const enabled = isFkEnabled();
   const notifyUrl = `https://${FK_DOMAIN}:${FK_PORT}${path}`;
   return [
@@ -1567,6 +1619,7 @@ function adminFkText() {
     `shop_id: <code>${sid || "не задан"}</code>`,
     `min amount: <code>${min}</code>`,
     `webhook path: <code>${esc(path)}</code>`,
+    `server ip: <code>${esc(ip || "не определен")}</code>`,
     "",
     `<i>Notification URL:</i>`,
     `<code>${esc(notifyUrl)}</code>`,
@@ -1864,6 +1917,7 @@ async function startFkTopup(uid, chatId, methodId) {
 async function handleFkAmount(uid, chatId, text, methodId) {
   const tx = T(uid);
   const minRub = fkMinRub();
+  const serverIp = fkServerIp();
   if (!isFkEnabled()) {
     await tg("sendMessage", { chat_id: chatId, text: "❌ FreeKassa не настроена." });
     return;
@@ -1873,8 +1927,8 @@ async function handleFkAmount(uid, chatId, text, methodId) {
     await tg("sendMessage", { chat_id: chatId, text: `❌ ${tx.fk_min(minRub)}`, parse_mode: "HTML" });
     return;
   }
-  if (!FK_SERVER_IP || FK_SERVER_IP === "127.0.0.1") {
-    await tg("sendMessage", { chat_id: chatId, text: "❌ Не задан валидный FREEKASSA_SERVER_IP в env." });
+  if (!serverIp) {
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Внешний IP не определен. Перезапустите бота или задайте FREEKASSA_SERVER_IP." });
     return;
   }
   clearUserState(uid);
@@ -1882,7 +1936,7 @@ async function handleFkAmount(uid, chatId, text, methodId) {
   const email = `${uid}@telegram.org`;
   let order;
   try {
-    order = await createFkOrder({ uid, amountRub: amount, methodId, email, ip: FK_SERVER_IP });
+    order = await createFkOrder({ uid, amountRub: amount, methodId, email, ip: serverIp });
   } catch (e) {
     await tg("sendMessage", { chat_id: chatId, text: `❌ FreeKassa: ${esc(e.message)}`, parse_mode: "HTML" });
     return;
@@ -2672,6 +2726,14 @@ function startWebhookServer() {
   });
 }
 
-init();
-startWebhookServer();
-poll();
+async function boot() {
+  init();
+  await ensureFkServerIp();
+  startWebhookServer();
+  poll();
+}
+
+boot().catch((e) => {
+  console.error("[boot]", e);
+  process.exit(1);
+});
