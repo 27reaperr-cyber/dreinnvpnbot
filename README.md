@@ -36,6 +36,19 @@
 - `BOT_SUPPORT_URL` — ссылка на поддержку
 - `BOT_FREE_PROXY_URL` — ссылка кнопки «Бесплатные прокси для TG»
 - `BOT_USERNAME` — username бота без `@` (для реферальной ссылки)
+- `FREEKASSA_SHOP_ID` — ID магазина FreeKassa
+- `FREEKASSA_API_KEY` — API ключ FreeKassa (из кабинета)
+- `FREEKASSA_SECRET2` — Secret Word 2 (для проверки подписи webhook)
+- `FREEKASSA_SERVER_IP` — внешний IP вашего сервера (не `127.0.0.1`)
+- `FREEKASSA_DOMAIN` — домен для логов/подсказки URL webhook (например, `dreinn.bothost.tech`)
+- `PORT` — порт HTTP сервера webhook (в вашем случае `3000`)
+- `FREEKASSA_NOTIFY_PATH` — путь webhook (по умолчанию `/freekassa/notify`)
+- `FREEKASSA_MIN_RUB` — минимальная сумма пополнения (по умолчанию `50`)
+- `FREEKASSA_CHECK_IPS` — `1` чтобы проверять IP отправителя webhook по whitelist FreeKassa
+
+URL для оповещений FreeKassa (Notification URL):
+
+`https://dreinn.bothost.tech:3000/freekassa/notify`
 
 ## Запуск
 

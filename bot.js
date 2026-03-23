@@ -2,6 +2,8 @@ require("dotenv").config();
 const path      = require("path");
 const crypto    = require("crypto");
 const fs        = require("fs");
+const http      = require("http");
+const qs        = require("querystring");
 const fsp       = fs.promises;
 const { spawn } = require("child_process");
 const Database  = require("better-sqlite3");
@@ -24,10 +26,31 @@ const CRYPTOBOT_API    = "https://pay.crypt.bot/api";
 const USDT_FALLBACK    = Number(process.env.CRYPTOBOT_FALLBACK_RATE || 90);
 const CRYPTO_MIN_RUB   = Number(process.env.CRYPTOBOT_MIN_RUB      || 50);
 const CRYPTO_INVOICE_TTL = 3600;
+// FreeKassa API
+const FK_API_BASE      = "https://api.fk.life/v1";
+const FK_SHOP_ID_ENV   = Number(process.env.FREEKASSA_SHOP_ID || 0);
+const FK_API_KEY       = process.env.FREEKASSA_API_KEY || "";
+const FK_SECRET2       = process.env.FREEKASSA_SECRET2 || "";
+const FK_SERVER_IP     = process.env.FREEKASSA_SERVER_IP || "";
+const FK_DOMAIN        = process.env.FREEKASSA_DOMAIN || "dreinn.bothost.tech";
+const FK_PORT          = Number(process.env.PORT || process.env.FREEKASSA_PORT || 3000);
+const FK_PATH_NOTIFY_ENV = process.env.FREEKASSA_NOTIFY_PATH || "/freekassa/notify";
+const FK_MIN_RUB_ENV   = Number(process.env.FREEKASSA_MIN_RUB || 50);
+const FK_ENABLE_IP_CHECK = process.env.FREEKASSA_CHECK_IPS === "1";
+const FK_ALLOWED_IPS   = new Set([
+  "168.119.157.136",
+  "168.119.60.227",
+  "178.154.197.79",
+  "51.250.54.238",
+]);
 
 if (!TOKEN || !API || !APP_SECRET || !ADMIN_ID) {
   console.error("Отсутствуют обязательные env: TELEGRAM_BOT_TOKEN, VPN_API_BASE_URL, APP_SECRET, ADMIN_TELEGRAM_ID");
   process.exit(1);
+}
+if (!FK_API_KEY || !FK_SECRET2) console.warn("[FreeKassa] API key/secret2 missing. FreeKassa is disabled.");
+if ((!FK_SERVER_IP || FK_SERVER_IP === "127.0.0.1")) {
+  console.warn("[FreeKassa] FREEKASSA_SERVER_IP is empty/localhost. createOrder can fail due to IP validation.");
 }
 
 const TG_BASE = `https://api.telegram.org/bot${TOKEN}`;
@@ -99,6 +122,9 @@ const I18N = {
     btn_check:      "✅ Проверить оплату",
     btn_pay_crypto: "💎 Crypto Bot (USDT)",
     btn_pay_other:  "💳 Другие способы оплаты",
+    btn_pay_qr:     "📷 СБП (QR)",
+    btn_pay_card:   "💳 Банковская карта РФ",
+    btn_pay_sber:   "🟢 SberPay",
     // Channel gate
     btn_check_sub:  "✅ Я подписался",
     btn_open_channel:"📢 Открыть канал",
@@ -211,6 +237,14 @@ const I18N = {
     crypto_steps:  "1 — Нажмите «Оплатить»\n2 — Переведите USDT в @CryptoBot\n3 — Вернитесь и проверьте оплату",
     crypto_ttl:    "<i>Счёт действителен 1 час.</i>",
     crypto_ok:     (v) => `<b>Зачислено ${rub(v)}</b>`,
+    // FreeKassa
+    fk_title:      "<b>Пополнение через FreeKassa</b>",
+    fk_enter:      "Введите сумму в рублях:",
+    fk_min:        (v) => `Минимум: <b>${rub(v)}</b>`,
+    fk_created:    "<b>Счёт создан</b>",
+    fk_steps:      "1 — Нажмите «Оплатить»\n2 — Завершите платёж на сайте\n3 — Баланс зачислится автоматически после вебхука",
+    fk_wait:       "<i>Если оплата уже выполнена, нажмите «Проверить оплату».</i>",
+    fk_ok:         (v) => `<b>Зачислено ${rub(v)}</b>`,
     // Purchases history
     ph_title:      "<b>История покупок</b>",
     ph_empty:      "Покупок пока нет.",
@@ -262,6 +296,9 @@ const I18N = {
     btn_check:      "✅ Check payment",
     btn_pay_crypto: "💎 Crypto Bot (USDT)",
     btn_pay_other:  "💳 Other payment methods",
+    btn_pay_qr:     "📷 SBP (QR)",
+    btn_pay_card:   "💳 Russian bank card",
+    btn_pay_sber:   "🟢 SberPay",
     // Channel gate
     btn_check_sub:  "✅ I've subscribed",
     btn_open_channel:"📢 Open channel",
@@ -361,6 +398,14 @@ const I18N = {
     crypto_steps:  "1 — Tap «Pay»\n2 — Send USDT in @CryptoBot\n3 — Come back and check payment",
     crypto_ttl:    "<i>Invoice valid for 1 hour.</i>",
     crypto_ok:     (v) => `<b>Credited ${rub(v)}</b>`,
+    // FreeKassa
+    fk_title:      "<b>Top up via FreeKassa</b>",
+    fk_enter:      "Enter amount in rubles:",
+    fk_min:        (v) => `Minimum: <b>${rub(v)}</b>`,
+    fk_created:    "<b>Invoice created</b>",
+    fk_steps:      "1 — Tap «Pay»\n2 — Complete payment on the website\n3 — Balance will be credited automatically by webhook",
+    fk_wait:       "<i>If you already paid, tap «Check payment».</i>",
+    fk_ok:         (v) => `<b>Credited ${rub(v)}</b>`,
     ph_title:      "<b>Purchase history</b>",
     ph_empty:      "No purchases yet.",
     ph_page:       (p,t) => `Page ${p+1} of ${t}`,
@@ -397,6 +442,14 @@ function parseLinks(text) {
 function setting(k, f = "")  { return db.prepare("SELECT value v FROM settings WHERE key=?").get(k)?.v ?? f; }
 function setSetting(k, v)    { db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(k, String(v ?? "")); }
 function delSetting(k)       { db.prepare("DELETE FROM settings WHERE key=?").run(k); }
+function fkShopId()          { return Number(setting("fk_shop_id", String(FK_SHOP_ID_ENV)) || 0); }
+function fkMinRub()          { return Math.max(1, Number(setting("fk_min_rub", String(FK_MIN_RUB_ENV)) || FK_MIN_RUB_ENV || 50)); }
+function fkNotifyPath() {
+  let p = String(setting("fk_notify_path", FK_PATH_NOTIFY_ENV) || FK_PATH_NOTIFY_ENV || "/freekassa/notify").trim();
+  if (!p.startsWith("/")) p = `/${p}`;
+  return p.replace(/\s+/g, "");
+}
+function isFkEnabled()       { return !!(fkShopId() > 0 && FK_API_KEY && FK_SECRET2); }
 
 // Configurable links (fallback to env / hardcoded defaults)
 // Normalize: @username → https://t.me/username, bare username → same
@@ -537,6 +590,22 @@ function init() {
     CREATE INDEX IF NOT EXISTS idx_cp_tg_id      ON crypto_payments(tg_id);
     CREATE INDEX IF NOT EXISTS idx_cp_invoice_id ON crypto_payments(invoice_id);
     CREATE INDEX IF NOT EXISTS idx_cp_status     ON crypto_payments(status);
+    CREATE TABLE IF NOT EXISTS freekassa_payments(
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_id          INTEGER NOT NULL,
+      amount_rub     INTEGER NOT NULL,
+      method_id      INTEGER NOT NULL,
+      payment_id     TEXT    NOT NULL UNIQUE,
+      fk_order_id    INTEGER,
+      location       TEXT    NOT NULL DEFAULT '',
+      status         TEXT    NOT NULL DEFAULT 'pending',
+      credited_at    INTEGER,
+      created_at     INTEGER NOT NULL,
+      updated_at     INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_fk_tg_id      ON freekassa_payments(tg_id);
+    CREATE INDEX IF NOT EXISTS idx_fk_payment_id ON freekassa_payments(payment_id);
+    CREATE INDEX IF NOT EXISTS idx_fk_status     ON freekassa_payments(status);
   `);
 
   // Migrations — idempotent
@@ -554,6 +623,9 @@ function init() {
   ssNew.run("channel_invite_url", "");
   ssNew.run("trial_enabled", "1");
   ssNew.run("trial_days", "7");
+  ssNew.run("fk_shop_id", String(FK_SHOP_ID_ENV || ""));
+  ssNew.run("fk_min_rub", String(FK_MIN_RUB_ENV || 50));
+  ssNew.run("fk_notify_path", FK_PATH_NOTIFY_ENV || "/freekassa/notify");
 
   // Seed tariffs
   const st = db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(code) DO NOTHING");
@@ -574,6 +646,10 @@ function init() {
     ["channel_invite_url",""],     // optional direct invite link shown to user
     ["trial_enabled","1"],         // "1" = on, "0" = off
     ["trial_days","7"],            // duration of trial in days
+    // FreeKassa runtime settings
+    ["fk_shop_id", String(FK_SHOP_ID_ENV || "")],
+    ["fk_min_rub", String(FK_MIN_RUB_ENV || 50)],
+    ["fk_notify_path", FK_PATH_NOTIFY_ENV || "/freekassa/notify"],
     // Configurable links
     ["url_support","https://t.me/dreinnvpnsupportbot"],["url_privacy",""],["url_terms",""],["url_proxy",""],["url_news",""],["url_status","https://dreinnvpn.vercel.app"],
   ];
@@ -720,6 +796,165 @@ function markCryptoCancelled(id) { db.prepare("UPDATE crypto_payments SET status
 function expireOldCryptoPayments(tgId) {
   db.prepare("UPDATE crypto_payments SET status='expired',updated_at=? WHERE tg_id=? AND status='pending' AND created_at<?")
     .run(now(),Number(tgId),now()-CRYPTO_INVOICE_TTL*1000);
+}
+
+// FreeKassa API
+let _fkNonce = 0;
+function nextFkNonce() {
+  const n = Math.floor(Date.now() / 1000);
+  _fkNonce = Math.max(_fkNonce + 1, n);
+  return _fkNonce;
+}
+function fkSignPayload(payload) {
+  const data = { ...payload };
+  delete data.signature;
+  const keys = Object.keys(data).sort();
+  const joined = keys.map((k) => String(data[k] ?? "")).join("|");
+  return crypto.createHmac("sha256", FK_API_KEY).update(joined).digest("hex");
+}
+function methodTitle(i, lang) {
+  const ru = { 44: "СБП (QR)", 36: "Банковская карта РФ", 43: "SberPay" };
+  const en = { 44: "SBP (QR)", 36: "Russian bank card", 43: "SberPay" };
+  return (lang === "en" ? en : ru)[Number(i)] || `i=${i}`;
+}
+function createFkPaymentRow(tgId, amountRub, methodId, paymentId, location, fkOrderId = null) {
+  return db
+    .prepare("INSERT INTO freekassa_payments(tg_id,amount_rub,method_id,payment_id,fk_order_id,location,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)")
+    .run(Number(tgId), Math.round(amountRub), Number(methodId), String(paymentId), fkOrderId ? Number(fkOrderId) : null, String(location || ""), now(), now()).lastInsertRowid;
+}
+function getFkPayment(id) {
+  return db.prepare("SELECT * FROM freekassa_payments WHERE id=?").get(Number(id));
+}
+function getFkPaymentByPaymentId(paymentId) {
+  return db.prepare("SELECT * FROM freekassa_payments WHERE payment_id=?").get(String(paymentId));
+}
+function markFkCancelled(id) {
+  db.prepare("UPDATE freekassa_payments SET status='cancelled',updated_at=? WHERE id=?").run(now(), Number(id));
+}
+function markFkPaid(id, fkOrderId = null) {
+  db.prepare("UPDATE freekassa_payments SET status='paid',fk_order_id=COALESCE(?, fk_order_id),credited_at=?,updated_at=? WHERE id=?")
+    .run(fkOrderId ? Number(fkOrderId) : null, now(), now(), Number(id));
+}
+async function fkApiPost(pathname, payload) {
+  const body = { ...payload, signature: fkSignPayload(payload) };
+  const r = await fetch(`${FK_API_BASE}${pathname}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Merchant ${fkShopId()}:${FK_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
+  const txt = await r.text();
+  let data = {};
+  try { data = txt ? JSON.parse(txt) : {}; } catch {}
+  if (!r.ok) throw new Error(data?.message || data?.error || `FreeKassa HTTP ${r.status}`);
+  if (data?.type && data.type !== "success") throw new Error(data?.message || data?.error || "FreeKassa error");
+  return data;
+}
+async function createFkOrder({ uid, amountRub, methodId, email, ip }) {
+  const paymentId = `tg${uid}_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  const payload = {
+    shopId: fkShopId(),
+    nonce: nextFkNonce(),
+    paymentId,
+    i: Number(methodId),
+    email,
+    ip,
+    amount: Number(amountRub).toFixed(2),
+    currency: "RUB",
+  };
+  const data = await fkApiPost("/orders/create", payload);
+  return { paymentId, orderId: data.orderId || null, location: data.location || "", raw: data };
+}
+async function checkFkOrderByPaymentId(paymentId) {
+  const payload = {
+    shopId: fkShopId(),
+    nonce: nextFkNonce(),
+    paymentId: String(paymentId),
+  };
+  const data = await fkApiPost("/orders", payload);
+  const list = Array.isArray(data?.orders) ? data.orders : [];
+  if (!list.length) return null;
+  return list[0];
+}
+function getRequestIp(req) {
+  const xr = String(req.headers["x-real-ip"] || "").trim();
+  if (xr) return xr;
+  const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  if (xff) return xff;
+  return (req.socket?.remoteAddress || "").replace(/^::ffff:/, "");
+}
+function parseBodyByContentType(raw, contentType) {
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.includes("application/json")) {
+    try { return JSON.parse(raw || "{}"); } catch { return {}; }
+  }
+  if (ct.includes("application/x-www-form-urlencoded")) return qs.parse(raw || "");
+  if (ct.includes("multipart/form-data")) {
+    const out = {};
+    const boundaryMatch = ct.match(/boundary=([^;]+)/i);
+    const boundary = boundaryMatch ? boundaryMatch[1].trim() : "";
+    if (!boundary) return out;
+    const parts = String(raw || "").split(`--${boundary}`);
+    for (const part of parts) {
+      if (!part || part === "--\r\n" || part === "--") continue;
+      const nameMatch = part.match(/name="([^"]+)"/i);
+      if (!nameMatch) continue;
+      const sep = part.indexOf("\r\n\r\n");
+      if (sep === -1) continue;
+      const val = part.slice(sep + 4).replace(/\r\n--$/, "").replace(/\r\n$/, "");
+      out[nameMatch[1]] = val;
+    }
+    return out;
+  }
+  return qs.parse(raw || "");
+}
+function validateFkWebhookSign(p) {
+  const sign = String(p.SIGN || p.sign || "").toLowerCase();
+  const merchantId = String(p.MERCHANT_ID || p.merchant_id || "");
+  const amount = String(p.AMOUNT || p.amount || "");
+  const merchantOrderId = String(p.MERCHANT_ORDER_ID || p.merchant_order_id || "");
+  if (!sign || !merchantId || !amount || !merchantOrderId) return false;
+  const local = crypto.createHash("md5").update(`${merchantId}:${amount}:${FK_SECRET2}:${merchantOrderId}`).digest("hex").toLowerCase();
+  return local === sign;
+}
+async function creditFkPaymentByPaymentId(paymentId, fkOrderId = null, paidAmount = null) {
+  const fp = getFkPaymentByPaymentId(paymentId);
+  if (!fp) return { ok: false, reason: "NOT_FOUND" };
+  if (fp.status === "paid") return { ok: true, reason: "ALREADY_PAID", fp };
+  if (fp.status !== "pending") return { ok: false, reason: "CLOSED", fp };
+  if (paidAmount != null) {
+    const pa = Math.round(Number(paidAmount));
+    if (!Number.isFinite(pa) || pa !== Number(fp.amount_rub)) return { ok: false, reason: "WRONG_AMOUNT", fp };
+  }
+  db.transaction(() => {
+    markFkPaid(fp.id, fkOrderId);
+    updateBalance(fp.tg_id, fp.amount_rub);
+  })();
+  const me = user(fp.tg_id);
+  const tx = T(fp.tg_id);
+  tg("sendMessage", {
+    chat_id: fp.tg_id,
+    text: [tx.fk_ok(fp.amount_rub), "", tx.success_bal(me.balance_rub)].join("\n"),
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [[{ text: tx.btn_buy_sub, callback_data: "v:buy" }, { text: tx.btn_home, callback_data: "v:home" }]] },
+  }).catch(() => {});
+  tg("sendMessage", {
+    chat_id: ADMIN_ID,
+    text: [
+      "<b>FreeKassa пополнение</b>",
+      "",
+      `${esc(me?.first_name || String(fp.tg_id))} (<code>${fp.tg_id}</code>)`,
+      `Сумма: <b>${rub(fp.amount_rub)}</b>`,
+      `Метод: <b>${esc(methodTitle(fp.method_id, "ru"))}</b>`,
+      `paymentId: <code>${esc(fp.payment_id)}</code>`,
+      ...(fkOrderId ? [`fk_order_id: <code>${fkOrderId}</code>`] : []),
+    ].join("\n"),
+    parse_mode: "HTML",
+  }).catch(() => {});
+  return { ok: true, reason: "PAID", fp };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1072,6 +1307,11 @@ function buyKb(uid) {
 function topupKb(uid) {
   const tx=T(uid), rows=[];
   if(CRYPTOBOT_TOKEN) rows.push([{text:tx.btn_pay_crypto,callback_data:"topup:crypto"}]);
+  if(isFkEnabled()){
+    rows.push([{text:tx.btn_pay_qr,callback_data:"fk:start:44"}]);
+    rows.push([{text:tx.btn_pay_card,callback_data:"fk:start:36"}]);
+    rows.push([{text:tx.btn_pay_sber,callback_data:"fk:start:43"}]);
+  }
   rows.push([{text:tx.btn_pay_other,callback_data:"v:pay_other"}]);
   rows.push([{text:tx.btn_back,callback_data:"v:profile"}]);
   return{inline_keyboard:rows};
@@ -1279,6 +1519,8 @@ function adminStatsText() {
   const refPaid = Number(db.prepare("SELECT COALESCE(SUM(reward_rub),0) s FROM referrals").get().s||0);
   const cryptoTotal=Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM crypto_payments WHERE status='paid'").get().s||0);
   const cryptoCount=Number(db.prepare("SELECT COUNT(*) c FROM crypto_payments WHERE status='paid'").get().c||0);
+  const fkTotal=Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM freekassa_payments WHERE status='paid'").get().s||0);
+  const fkCount=Number(db.prepare("SELECT COUNT(*) c FROM freekassa_payments WHERE status='paid'").get().c||0);
   return [
     "<b>Статистика</b>","",
     `Пользователей: <b>${uCount}</b>  (+${newDay} сегодня)`,
@@ -1287,6 +1529,7 @@ function adminStatsText() {
     `Общая выручка: <b>${rub(revenue)}</b>`,
     `Начислено рефералам: <b>${rub(refPaid)}</b>`,
     `Crypto платежей: <b>${cryptoCount}</b> (${rub(cryptoTotal)})`,
+    `FreeKassa платежей: <b>${fkCount}</b> (${rub(fkTotal)})`,
   ].join("\n");
 }
 
@@ -1309,6 +1552,25 @@ function adminLinksText() {
   const lines=["<b>Настройка ссылок</b>",""];
   rows.forEach(([,label,val])=>lines.push(`${val?"✅":"⬜"} ${label}: ${val?`<code>${esc(val)}</code>`:"<i>не задано</i>"}`));
   return lines.join("\n");
+}
+
+function adminFkText() {
+  const sid = fkShopId();
+  const min = fkMinRub();
+  const path = fkNotifyPath();
+  const enabled = isFkEnabled();
+  const notifyUrl = `https://${FK_DOMAIN}:${FK_PORT}${path}`;
+  return [
+    "<b>FreeKassa настройки</b>",
+    "",
+    `Статус: <b>${enabled ? "включено ✅" : "выключено ❌"}</b>`,
+    `shop_id: <code>${sid || "не задан"}</code>`,
+    `min amount: <code>${min}</code>`,
+    `webhook path: <code>${esc(path)}</code>`,
+    "",
+    `<i>Notification URL:</i>`,
+    `<code>${esc(notifyUrl)}</code>`,
+  ].join("\n");
 }
 
 
@@ -1423,6 +1685,7 @@ async function render(uid, chatId, msgId, view, data={}) {
         [{text:"🖼 Изображения",callback_data:"a:imgs"},{text:"💰 Текст пополнения",callback_data:"a:p"}],
         [{text:"🤝 Реф. процент",callback_data:"a:r"},{text:"📋 Инструкция",callback_data:"a:guide_edit"}],
         [{text:"📢 Канал + Пробный период",callback_data:"a:channel"}],
+        [{text:"💳 FreeKassa",callback_data:"a:fk"}],
         [{text:"🔍 Поиск юзера",callback_data:"a:find"}],
         [{text:"🗄 База данных",callback_data:"a:db"}],
         [{text:"« Назад",callback_data:"v:home"}],
@@ -1509,6 +1772,16 @@ async function render(uid, chatId, msgId, view, data={}) {
       ]};
       break;
     }
+    case "a_fk": {
+      text = adminFkText();
+      kb = { inline_keyboard: [
+        [{text:"✏️ shop_id",callback_data:"a:fk_shop"}],
+        [{text:"✏️ min amount",callback_data:"a:fk_min"}],
+        [{text:"✏️ webhook path",callback_data:"a:fk_path"}],
+        [{text:"« Назад",callback_data:"a:main"}],
+      ]};
+      break;
+    }
     case "a_guide_edit":
       text=[
         "<b>Инструкция по подключению</b>",
@@ -1565,6 +1838,82 @@ async function handleCryptoAmount(uid, chatId, text) {
     [{text:tx.btn_check,callback_data:`cp:check:${cpId}`}],
     [{text:tx.btn_cancel,callback_data:`cp:cancel:${cpId}`}],
   ]}});
+}
+
+async function startFkTopup(uid, chatId, methodId) {
+  const tx = T(uid);
+  const method = Number(methodId);
+  const minRub = fkMinRub();
+  setUserState(uid, "topup_fk_amount", String(method));
+  const text = [
+    tx.fk_title,
+    "",
+    `<b>${esc(methodTitle(method, getLang(uid)))}</b>`,
+    tx.fk_min(minRub),
+    "",
+    tx.fk_enter,
+  ].join("\n");
+  await tg("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    reply_markup: { keyboard: [[{ text: "Отмена" }]], resize_keyboard: true, one_time_keyboard: true },
+  });
+}
+
+async function handleFkAmount(uid, chatId, text, methodId) {
+  const tx = T(uid);
+  const minRub = fkMinRub();
+  if (!isFkEnabled()) {
+    await tg("sendMessage", { chat_id: chatId, text: "❌ FreeKassa не настроена." });
+    return;
+  }
+  const amount = Math.round(parseFloat(String(text).replace(/[^\d.]/g, "")) || 0);
+  if (!amount || amount < minRub) {
+    await tg("sendMessage", { chat_id: chatId, text: `❌ ${tx.fk_min(minRub)}`, parse_mode: "HTML" });
+    return;
+  }
+  if (!FK_SERVER_IP || FK_SERVER_IP === "127.0.0.1") {
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Не задан валидный FREEKASSA_SERVER_IP в env." });
+    return;
+  }
+  clearUserState(uid);
+  await tg("sendMessage", { chat_id: chatId, text: "⏳", reply_markup: { remove_keyboard: true } });
+  const email = `${uid}@telegram.org`;
+  let order;
+  try {
+    order = await createFkOrder({ uid, amountRub: amount, methodId, email, ip: FK_SERVER_IP });
+  } catch (e) {
+    await tg("sendMessage", { chat_id: chatId, text: `❌ FreeKassa: ${esc(e.message)}`, parse_mode: "HTML" });
+    return;
+  }
+  if (!order.location) {
+    await tg("sendMessage", { chat_id: chatId, text: "❌ FreeKassa не вернула ссылку оплаты." });
+    return;
+  }
+  const fkId = createFkPaymentRow(uid, amount, Number(methodId), order.paymentId, order.location, order.orderId);
+  const msgText = [
+    tx.fk_created,
+    "",
+    `Сумма: <b>${rub(amount)}</b>`,
+    `Метод: <b>${esc(methodTitle(methodId, getLang(uid)))}</b>`,
+    "",
+    tx.fk_steps,
+    tx.fk_wait,
+  ].join("\n");
+  await tg("sendMessage", {
+    chat_id: chatId,
+    text: msgText,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "💳 Оплатить", url: order.location }],
+        [{ text: tx.btn_check, callback_data: `fk:check:${fkId}` }],
+        [{ text: tx.btn_cancel, callback_data: `fk:cancel:${fkId}` }],
+      ],
+    },
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1735,6 +2084,30 @@ async function handleAdminState(msg) {
       await tg("sendMessage",{chat_id:chatId,text:`✅ Длительность: ${n} дн.`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_channel"); return true;
     }
+    case "fk_shop_id": {
+      const n = parseInt(text, 10);
+      if(!Number.isFinite(n) || n <= 0){await tg("sendMessage",{chat_id:chatId,text:"Введите корректный shop_id (> 0)."});return true;}
+      setSetting("fk_shop_id", String(n)); clearAdminState(aid);
+      await tg("sendMessage",{chat_id:chatId,text:`✅ shop_id: <code>${n}</code>`,parse_mode:"HTML"});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_fk"); return true;
+    }
+    case "fk_min_rub": {
+      const n = parseInt(text, 10);
+      if(!Number.isFinite(n) || n < 1){await tg("sendMessage",{chat_id:chatId,text:"Введите минимальную сумму (целое число >= 1)."});return true;}
+      setSetting("fk_min_rub", String(n)); clearAdminState(aid);
+      await tg("sendMessage",{chat_id:chatId,text:`✅ min amount: <code>${n}</code>`,parse_mode:"HTML"});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_fk"); return true;
+    }
+    case "fk_notify_path": {
+      let p = text.trim();
+      if(!p){await tg("sendMessage",{chat_id:chatId,text:"Введите путь webhook, например /freekassa/notify"});return true;}
+      if(p==="-"||p==="default") p = "/freekassa/notify";
+      if(!p.startsWith("/")) p = `/${p}`;
+      p = p.replace(/\s+/g, "");
+      setSetting("fk_notify_path", p); clearAdminState(aid);
+      await tg("sendMessage",{chat_id:chatId,text:`✅ webhook path: <code>${esc(p)}</code>`,parse_mode:"HTML"});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_fk"); return true;
+    }
   } // end switch
   return false;
 } // end handleAdminState
@@ -1755,7 +2128,7 @@ async function handleMessage(msg) {
   if((text==="Отмена"||text==="Cancel")&&ustate){
     clearUserState(from.id);
     await tg("sendMessage",{chat_id:chatId,text:"✕",reply_markup:{remove_keyboard:true}});
-    const view=ustate.state==="topup_crypto_amount"?"topup":"home";
+    const view=(ustate.state==="topup_crypto_amount"||ustate.state==="topup_fk_amount")?"topup":"home";
     await render(from.id,chatId,user(from.id)?.last_menu_id||null,view);
     return;
   }
@@ -1764,6 +2137,11 @@ async function handleMessage(msg) {
   if(ustate?.state==="topup_crypto_amount"){
     if(!msg.text||msg.text.startsWith("/")) return;
     await handleCryptoAmount(from.id,chatId,text); return;
+  }
+  if(ustate?.state==="topup_fk_amount"){
+    if(!msg.text||msg.text.startsWith("/")) return;
+    const methodId = Number(ustate.payload || 44);
+    await handleFkAmount(from.id,chatId,text,methodId); return;
   }
 
 
@@ -1846,7 +2224,7 @@ async function handleCallback(q) {
   const ans=(text="",alert=false)=>tg("answerCallbackQuery",{callback_query_id:q.id,...(text?{text,show_alert:alert}:{})}).catch(()=>{});
 
   // Rate limit: ignore rapid repeated taps (except noop/check which user intentionally retries)
-  if(!data.startsWith("cp:check")&&!data.startsWith("cp:cancel")&&!checkCbRateLimit(uid)){await ans();return;}
+  if(!data.startsWith("cp:check")&&!data.startsWith("cp:cancel")&&!data.startsWith("fk:check")&&!data.startsWith("fk:cancel")&&!checkCbRateLimit(uid)){await ans();return;}
 
   if(data==="noop"){await ans();return;}
 
@@ -1984,6 +2362,14 @@ async function handleCallback(q) {
     if(!CRYPTOBOT_TOKEN){await ans("CryptoBot не настроен.",true);return;}
     await ans(); await startCryptoTopup(uid,chatId); return;
   }
+  if(data.startsWith("fk:start:")){
+    if(!isFkEnabled()){await ans("FreeKassa не настроена.",true);return;}
+    const methodId=Number(data.split(":")[2]||44);
+    if(![44,36,43].includes(methodId)){await ans("Неверный метод оплаты.",true);return;}
+    await ans();
+    await startFkTopup(uid,chatId,methodId);
+    return;
+  }
   if(data.startsWith("cp:check:")){
     const cpId=Number(data.split(":")[2]), cp=getCryptoPayment(cpId);
     if(!cp||cp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
@@ -2010,9 +2396,42 @@ async function handleCallback(q) {
     await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
     return;
   }
+  if(data.startsWith("fk:check:")){
+    const fpId=Number(data.split(":")[2]), fp=getFkPayment(fpId);
+    if(!fp||fp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(fp.status==="paid"){await ans("✅ Уже зачислено!",true);return;}
+    if(fp.status!=="pending"){await ans("Счёт закрыт. Создайте новый.",true);return;}
+    await ans("⏳ Проверяю...");
+    try{
+      const ord=await checkFkOrderByPaymentId(fp.payment_id);
+      const paidStatus=ord && (Number(ord.status)===1 || String(ord.status||"").toLowerCase()==="paid");
+      if(!paidStatus){
+        await tg("answerCallbackQuery",{callback_query_id:q.id,text:"❌ Оплата пока не найдена. Попробуйте позже.",show_alert:true}).catch(()=>{});
+        return;
+      }
+      const credit=await creditFkPaymentByPaymentId(fp.payment_id, ord.id || ord.orderId || null, ord.amount || null);
+      if(!credit.ok&&credit.reason==="WRONG_AMOUNT"){
+        await tg("answerCallbackQuery",{callback_query_id:q.id,text:"❌ Сумма платежа не совпадает.",show_alert:true}).catch(()=>{});
+        return;
+      }
+      const me=user(uid), tx=T(uid);
+      await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.fk_ok(fp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
+    }catch(e){
+      await tg("answerCallbackQuery",{callback_query_id:q.id,text:`❌ ${String(e.message||"Ошибка проверки")}`.slice(0,200),show_alert:true}).catch(()=>{});
+    }
+    return;
+  }
+  if(data.startsWith("fk:cancel:")){
+    const fpId=Number(data.split(":")[2]), fp=getFkPayment(fpId);
+    if(!fp||fp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(fp.status!=="pending"){await ans("Счёт уже закрыт.",true);return;}
+    markFkCancelled(fpId); await ans("Отменено.");
+    await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
+    return;
+  }
 
   // ── Admin nav ─────────────────────────────────────────────────────────────
-  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_pay","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel"};
+  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_pay","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk"};
   if(adminNav[data]){await render(uid,chatId,msgId,adminNav[data]);await ans();return;}
 
   // ── Channel / trial admin actions ─────────────────────────────────────────
@@ -2035,6 +2454,21 @@ async function handleCallback(q) {
   if(data==="a:trial_days"){
     setAdminState(uid,"trial_days","");
     await tg("sendMessage",{chat_id:chatId,text:`Текущая длительность: <b>${trialDays()} дн.</b>\n\nВведите новое значение (1..365):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await ans(); return;
+  }
+  if(data==="a:fk_shop"){
+    setAdminState(uid,"fk_shop_id","");
+    await tg("sendMessage",{chat_id:chatId,text:`Текущий shop_id: <code>${fkShopId() || "не задан"}</code>\n\nВведите новый shop_id (число > 0):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await ans(); return;
+  }
+  if(data==="a:fk_min"){
+    setAdminState(uid,"fk_min_rub","");
+    await tg("sendMessage",{chat_id:chatId,text:`Текущий min amount: <code>${fkMinRub()}</code>\n\nВведите новую минимальную сумму (в рублях):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await ans(); return;
+  }
+  if(data==="a:fk_path"){
+    setAdminState(uid,"fk_notify_path","");
+    await tg("sendMessage",{chat_id:chatId,text:`Текущий webhook path: <code>${esc(fkNotifyPath())}</code>\n\nВведите новый путь (например /freekassa/notify):\n/cancel — отмена.`,parse_mode:"HTML"});
     await ans(); return;
   }
 
@@ -2164,5 +2598,80 @@ async function poll() {
   }
 }
 
+function startWebhookServer() {
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+      if (req.method === "GET" && url.pathname === "/healthz") {
+        res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: true, service: "bot", freeKassa: isFkEnabled(), ts: Date.now() }));
+        return;
+      }
+      if (req.method !== "POST" || url.pathname !== fkNotifyPath()) {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Not found");
+        return;
+      }
+
+      const remoteIp = getRequestIp(req);
+      if (FK_ENABLE_IP_CHECK && !FK_ALLOWED_IPS.has(remoteIp)) {
+        console.warn("[FK webhook] denied ip:", remoteIp);
+        res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("IP is not allowed");
+        return;
+      }
+
+      const chunks = [];
+      let size = 0;
+      req.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 1024 * 1024) req.destroy();
+        else chunks.push(chunk);
+      });
+      await new Promise((resolve) => req.on("end", resolve));
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const payload = parseBodyByContentType(raw, req.headers["content-type"]);
+
+      if (!validateFkWebhookSign(payload)) {
+        console.warn("[FK webhook] bad sign payload:", payload);
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Bad signature");
+        return;
+      }
+      const merchantId = Number(payload.MERCHANT_ID || payload.merchant_id || 0);
+      if (merchantId !== fkShopId()) {
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Wrong shop id");
+        return;
+      }
+
+      const paymentId = String(payload.MERCHANT_ORDER_ID || payload.merchant_order_id || "");
+      const fkOrderId = payload.intid || payload.INTID || payload.orderId || null;
+      const paidAmount = payload.AMOUNT || payload.amount || null;
+      const credited = await creditFkPaymentByPaymentId(paymentId, fkOrderId, paidAmount);
+
+      if (!credited.ok && credited.reason !== "ALREADY_PAID") {
+        console.warn("[FK webhook] credit failed:", credited.reason, paymentId);
+        res.writeHead(409, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Order not accepted");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("YES");
+    } catch (e) {
+      console.error("[webhook]", e);
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Server error");
+    }
+  });
+
+  server.listen(FK_PORT, "0.0.0.0", () => {
+    const notifyUrl = `https://${FK_DOMAIN}:${FK_PORT}${fkNotifyPath()}`;
+    console.log(`[Webhook] HTTP server listening on :${FK_PORT}`);
+    console.log(`[Webhook] Configure FreeKassa notify URL: ${notifyUrl}`);
+  });
+}
+
 init();
+startWebhookServer();
 poll();
