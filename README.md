@@ -63,3 +63,21 @@ npm run start
 ```bash
 npm run check
 ```
+
+## 2026 Patch Notes
+
+- DB changes are additive and backward-compatible: new columns/tables are created through runtime migrations and do not require wiping the current SQLite database.
+- Plan purchase is now simplified: after choosing a tariff the bot creates a checkout session for the exact tariff amount, supports promo codes, and lets the user pay from balance, CryptoBot, or FreeKassa.
+- CryptoBot webhook support was added for instant crediting/activation without the `Check` button. FreeKassa instant crediting is also supported through the existing notify endpoint.
+- Stale `user_states` and checkout sessions are cleaned up automatically, and pending CryptoBot invoices are expired in background maintenance jobs.
+- Subscription expiry reminders are sent automatically for users whose plan ends in 3 days and in 1 day, with a direct `Renew` button.
+- Daily database backup delivery to all admins was added. The hour is controlled by `BACKUP_HOUR`.
+- Telegram commands are now registered on startup with `setMyCommands`.
+
+## Webhook / Runtime Notes
+
+- Expose the local webhook server only behind an HTTPS reverse proxy. The bot itself listens on plain HTTP for the internal hop, but public webhook URLs should be HTTPS.
+- CryptoBot webhook path is controlled by `CRYPTOBOT_WEBHOOK_PATH`. If not set, the bot generates a deterministic secret path and prints it on startup.
+- FreeKassa IP allowlist can now be configured through `FREEKASSA_ALLOWED_IPS` or the `fk_allowed_ips` setting stored in SQLite.
+- FreeKassa payer email domain can be configured through `FREEKASSA_EMAIL_DOMAIN`.
+- Under PM2, systemd, Docker, or similar process managers the bot now exits cleanly instead of spawning an orphan child process on restart/import. Let the process manager perform the actual restart.

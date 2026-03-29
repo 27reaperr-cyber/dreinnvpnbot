@@ -3,7 +3,6 @@ const path      = require("path");
 const crypto    = require("crypto");
 const fs        = require("fs");
 const http      = require("http");
-const qs        = require("querystring");
 const fsp       = fs.promises;
 const { spawn } = require("child_process");
 const Database  = require("better-sqlite3");
@@ -20,12 +19,15 @@ const NEWS_URL         = process.env.BOT_NEWS_URL          || "";
 const SUPPORT_URL      = process.env.BOT_SUPPORT_URL       || "https://t.me/dreinnvpnsupportbot";
 const FREE_PROXY       = process.env.BOT_FREE_PROXY_URL    || "";
 const BOT_USERNAME     = process.env.BOT_USERNAME          || "";
+const FK_EMAIL_DOMAIN  = process.env.FK_EMAIL_DOMAIN       || "bot.user";
 // CryptoBot
 const CRYPTOBOT_TOKEN  = process.env.CRYPTOBOT_TOKEN       || "";
 const CRYPTOBOT_API    = "https://pay.crypt.bot/api";
 const USDT_FALLBACK    = Number(process.env.CRYPTOBOT_FALLBACK_RATE || 90);
 const CRYPTO_MIN_RUB   = Number(process.env.CRYPTOBOT_MIN_RUB      || 50);
 const CRYPTO_INVOICE_TTL = 3600;
+// CryptoBot webhook
+const CRYPTOBOT_WEBHOOK_PATH = process.env.CRYPTOBOT_WEBHOOK_PATH || "/cryptobot/webhook";
 // FreeKassa API
 const FK_API_BASE      = "https://api.fk.life/v1";
 const FK_SHOP_ID_ENV   = Number(process.env.FREEKASSA_SHOP_ID || 0);
@@ -137,7 +139,6 @@ const I18N = {
     trial_used_msg: "Пробный период уже использован.",
     trial_has_sub:  "У вас уже есть активная подписка.",
     channel_gate:   "👋 Чтобы пользоваться ботом, подпишитесь на наш канал.",
-    btn_check_sub:  "✅ Я подписался",
     // Language
     lang_title:  "🌐 <b>Выбор языка</b>",
     lang_current:"Текущий язык",
@@ -158,7 +159,7 @@ const I18N = {
     sub_title:   "<b>Моя подписка</b>",
     sub_none:    "Активная подписка не найдена.\n\n<i>Оформите тариф в разделе «Купить VPN».</i>",
     sub_plan:    (v) => `Тариф: <b>${esc(v)}</b>`,
-    sub_exp:     (v) => `Истекает: <b>${dt(v)}</b>`,
+    sub_exp:     (v) => `Истекает: <b>${v}</b>`,
     sub_left:    (d,h,m) => `Осталось: <b>${d} дн. ${h} ч. ${m} мин.</b>`,
     sub_devices: "До 3 устройств",
     sub_link_hdr:"Ссылка подписки:",
@@ -224,7 +225,7 @@ const I18N = {
     success_plan:  (v) => `Тариф: <b>${esc(v)}</b>`,
     success_paid:  (v) => `Списано: <b>${rub(v)}</b>`,
     success_bal:   (v) => `Баланс: <b>${rub(v)}</b>`,
-    success_exp:   (v) => `Истекает: <b>${dt(v)}</b>`,
+    success_exp:   (v) => `Истекает: <b>${v}</b>`,
 
     // Crypto
     crypto_title:  "<b>Пополнение через Crypto Bot</b>",
@@ -242,7 +243,7 @@ const I18N = {
     fk_enter:      "Введите сумму в рублях:",
     fk_min:        (v) => `Минимум: <b>${rub(v)}</b>`,
     fk_created:    "<b>Счёт создан</b>",
-    fk_steps:      "1 — Нажмите «Оплатить»\n2 — Завершите платёж на сайте\n3 — Баланс зачислится автоматически после вебхука",
+    fk_steps:      "1 — Нажмите «Оплатить»\n2 — Завершите платёж на сайте\n3 — Баланс зачислится автоматически",
     fk_wait:       "<i>Если оплата уже выполнена, нажмите «Проверить оплату».</i>",
     fk_ok:         (v) => `<b>Зачислено ${rub(v)}</b>`,
     // Purchases history
@@ -255,6 +256,42 @@ const I18N = {
     // Other
     other_title:   "<b>Настройки</b>",
     other_proxy:   "🆓 Бесплатные прокси для Telegram",
+    // Promo codes
+    btn_promo:      "🎟 Ввести промокод",
+    promo_enter:    "Введите промокод:",
+    promo_ok:       (pct, code) => `✅ Промокод <b>${esc(code)}</b> применён — скидка <b>${pct}%</b>`,
+    promo_invalid:  "❌ Промокод не найден или истёк.",
+    promo_used:     "❌ Промокод уже был использован. Каждый пользователь может применить только один промокод.",
+    promo_applied:  (pct) => `<i>Промокод: скидка ${pct}%</i>`,
+    // Direct payment (when buying tariff without balance)
+    btn_pay_balance:"💳 Оплатить с баланса",
+    direct_title:   (plan, price) => `<b>Оплата: ${esc(plan)}</b>\n\nСумма: <b>${price}</b>\n\nВыберите способ оплаты:`,
+    direct_no_bal:  (need, have) => `⚠️ На балансе <b>${have}</b>, нужно <b>${need}</b>. Пополните или оплатите напрямую:`,
+    // Expiry notifications
+    notify_3days:   (plan, days) => `⏰ <b>Напоминание</b>\n\nВаша подписка «${esc(plan)}» истекает через <b>${days} дн.</b>\n\nПродлите заранее, чтобы не терять доступ.`,
+    notify_1day:    (plan) => `🔴 <b>Подписка истекает завтра!</b>\n\nТариф «${esc(plan)}» заканчивается. Продлите сейчас.`,
+    notify_expired: (plan) => `❌ <b>Подписка истекла</b>\n\nТариф «${esc(plan)}» закончился. Оформите новый, чтобы продолжить пользоваться VPN.`,
+    btn_renew_now:  "🔄 Продлить сейчас",
+    // Admin grant sub
+    admin_grant_pick: "Выберите тариф для выдачи:",
+    admin_grant_ok: (name, plan) => `✅ Подписка «${esc(plan)}» выдана пользователю ${esc(name)}.`,
+    admin_grant_rcvd: (plan, days) => `🎁 <b>Вам выдана подписка!</b>\n\nТариф: <b>${esc(plan)}</b>\nДоступ открыт на <b>${days} дн.</b>`,
+    btn_grant_sub:  "🎁 Выдать подписку",
+    // Admin promo
+    admin_promo_list: "<b>Промокоды</b>",
+    admin_promo_empty:"Промокодов нет.",
+    admin_promo_add: "Введите промокод в формате:\n<code>КОД СКИДКА_% [MAX_ИСПОЛЬЗОВАНИЙ]</code>\nПример: <code>SALE10 10 100</code>\n",
+    // Ref history page (was hardcoded RU)
+    rh_page:        (p, t) => `Стр. ${p+1}/${t}`,
+    // Device selection
+    dev_title:      "🚀 <b>Настройка тарифа</b>",
+    dev_base:       (n) => `Базово: <b>${n} устр.</b>`,
+    dev_now:        (n) => `Сейчас: <b>${n} устр.</b>`,
+    dev_price:      (v) => `💰 К оплате: <b>${rub(v)}</b>`,
+    dev_hint:       "Выберите количество устройств:",
+    dev_pay:        (v) => `Оплатить ${rub(v)}`,
+    dev_surcharge:  (v) => `<i>+${rub(v)} за доп. устройства</i>`,
+    btn_devices_extra:"⚙️ Цена за доп. устройство",
   },
   en: {
     btn_back:       "« Back",
@@ -328,7 +365,7 @@ const I18N = {
     sub_title:   "<b>My subscription</b>",
     sub_none:    "No active subscription found.\n\n<i>Get a plan in «Buy VPN».</i>",
     sub_plan:    (v) => `Plan: <b>${esc(v)}</b>`,
-    sub_exp:     (v) => `Expires: <b>${dt(v)}</b>`,
+    sub_exp:     (v) => `Expires: <b>${v}</b>`,
     sub_left:    (d,h,m) => `Remaining: <b>${d}d ${h}h ${m}m</b>`,
     sub_devices: "Up to 3 devices",
     sub_link_hdr:"Subscription link:",
@@ -386,7 +423,7 @@ const I18N = {
     success_plan:  (v) => `Plan: <b>${esc(v)}</b>`,
     success_paid:  (v) => `Charged: <b>${rub(v)}</b>`,
     success_bal:   (v) => `Balance: <b>${rub(v)}</b>`,
-    success_exp:   (v) => `Expires: <b>${dt(v)}</b>`,
+    success_exp:   (v) => `Expires: <b>${v}</b>`,
 
     crypto_title:  "<b>Top up via Crypto Bot</b>",
     crypto_desc:   "Pay in USDT (TRC20). Instant credit.",
@@ -403,7 +440,7 @@ const I18N = {
     fk_enter:      "Enter amount in rubles:",
     fk_min:        (v) => `Minimum: <b>${rub(v)}</b>`,
     fk_created:    "<b>Invoice created</b>",
-    fk_steps:      "1 — Tap «Pay»\n2 — Complete payment on the website\n3 — Balance will be credited automatically by webhook",
+    fk_steps:      "1 — Tap «Pay»\n2 — Complete payment on the website\n3 — Balance will be credited automatically",
     fk_wait:       "<i>If you already paid, tap «Check payment».</i>",
     fk_ok:         (v) => `<b>Credited ${rub(v)}</b>`,
     ph_title:      "<b>Purchase history</b>",
@@ -413,6 +450,36 @@ const I18N = {
     rh_empty:      "No earnings yet.",
     other_title:   "<b>Settings</b>",
     other_proxy:   "🆓 Free Telegram proxies",
+    btn_promo:      "🎟 Enter promo code",
+    promo_enter:    "Enter promo code:",
+    promo_ok:       (pct, code) => `✅ Promo code <b>${esc(code)}</b> applied — <b>${pct}%</b> discount`,
+    promo_invalid:  "❌ Promo code not found or expired.",
+    promo_used:     "❌ Promo code already used. Each user can apply only one promo code.",
+    promo_applied:  (pct) => `<i>Promo code: ${pct}% off</i>`,
+    btn_pay_balance:"💳 Pay from balance",
+    direct_title:   (plan, price) => `<b>Payment: ${esc(plan)}</b>\n\nAmount: <b>${price}</b>\n\nChoose payment method:`,
+    direct_no_bal:  (need, have) => `⚠️ Balance <b>${have}</b>, need <b>${need}</b>. Top up or pay directly:`,
+    notify_3days:   (plan, days) => `⏰ <b>Reminder</b>\n\nYour subscription «${esc(plan)}» expires in <b>${days} days</b>.\n\nRenew in advance to keep access.`,
+    notify_1day:    (plan) => `🔴 <b>Subscription expires tomorrow!</b>\n\nPlan «${esc(plan)}» ends soon. Renew now.`,
+    notify_expired: (plan) => `❌ <b>Subscription expired</b>\n\nPlan «${esc(plan)}» has ended. Get a new one to continue using VPN.`,
+    btn_renew_now:  "🔄 Renew now",
+    admin_grant_pick: "Choose a plan to grant:",
+    admin_grant_ok: (name, plan) => `✅ Subscription «${esc(plan)}» granted to ${esc(name)}.`,
+    admin_grant_rcvd: (plan, days) => `🎁 <b>You received a subscription!</b>\n\nPlan: <b>${esc(plan)}</b>\nAccess granted for <b>${days} days</b>.`,
+    btn_grant_sub:  "🎁 Grant subscription",
+    admin_promo_list: "<b>Promo codes</b>",
+    admin_promo_empty:"No promo codes.",
+    admin_promo_add: "Enter promo code as:\n<code>CODE DISCOUNT_% [MAX_USES]</code>\nExample: <code>SALE10 10 100</code>\n",
+    rh_page:        (p, t) => `Page ${p+1}/${t}`,
+    // Device selection
+    dev_title:      "🚀 <b>Plan Configuration</b>",
+    dev_base:       (n) => `Base: <b>${n} dev.</b>`,
+    dev_now:        (n) => `Now: <b>${n} dev.</b>`,
+    dev_price:      (v) => `💰 Total: <b>${rub(v)}</b>`,
+    dev_hint:       "Choose number of devices:",
+    dev_pay:        (v) => `Pay ${rub(v)}`,
+    dev_surcharge:  (v) => `<i>+${rub(v)} for extra devices</i>`,
+    btn_devices_extra:"⚙️ Extra device price",
   }
 };
 
@@ -422,8 +489,8 @@ const I18N = {
 const now     = () => Date.now();
 const esc     = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const rub     = (n) => `${Number(n||0).toLocaleString("ru-RU")} ₽`;
-const dt      = (ts) => ts ? new Date(ts).toLocaleDateString("ru-RU")  : "—";
-const dts     = (ts) => ts ? new Date(ts).toLocaleString("ru-RU")      : "—";
+const dt      = (ts, lang="ru") => ts ? new Date(ts).toLocaleDateString(lang==="en"?"en-GB":"ru-RU") : "—";
+const dts     = (ts) => ts ? new Date(ts).toLocaleString("ru-RU") : "—";
 const isAdmin = (id) => Number(id) === ADMIN_ID;
 const sleep   = (ms) => new Promise(r => setTimeout(r, ms));
 const refLink = (code) => BOT_USERNAME
@@ -547,12 +614,106 @@ function addReferralReward(buyerId, amount) {
 
 // Withdrawal system removed — ref rewards go directly to main balance
 
+// ── Expiry notification job ───────────────────────────────────────────────────
+function startExpiryNotificationJob() {
+  const CHECK_INTERVAL = 60 * 60 * 1000; // every hour
+  async function checkExpiry() {
+    try {
+      const now_ = now();
+      const subs = db.prepare(`
+        SELECT s.tg_id, s.expires_at, s.plan_title, s.plan_code, u.lang
+        FROM subscriptions s JOIN users u ON u.tg_id=s.tg_id
+        WHERE s.is_active=1 AND s.expires_at>? AND s.plan_code!='trial'
+      `).all(now_);
+      for (const s of subs) {
+        const msLeft = s.expires_at - now_;
+        const daysLeft = Math.floor(msLeft / 86400000);
+        const lang = s.lang || "ru";
+        const tx = I18N[lang] || I18N.ru;
+        const planName = s.plan_title || s.plan_code;
+        let level = null;
+        if (daysLeft <= 1)      level = "1day";
+        else if (daysLeft <= 3) level = "3days";
+        if (!level) continue;
+        const already = db.prepare("SELECT 1 FROM notified_expiry WHERE tg_id=? AND level=?").get(s.tg_id, level);
+        if (already) continue;
+        const text = level === "1day" ? tx.notify_1day(planName) : tx.notify_3days(planName, daysLeft);
+        const kb = { inline_keyboard: [[{text:tx.btn_renew_now, callback_data:"v:buy"}]] };
+        tg("sendMessage",{chat_id:s.tg_id,text,parse_mode:"HTML",reply_markup:kb}).catch(()=>{});
+        db.prepare("INSERT OR REPLACE INTO notified_expiry(tg_id,level,notified_at) VALUES(?,?,?)").run(s.tg_id, level, now_);
+      }
+      // Notify just-expired (within last 2h)
+      const expired = db.prepare(`
+        SELECT s.tg_id, s.plan_title, s.plan_code, u.lang
+        FROM subscriptions s JOIN users u ON u.tg_id=s.tg_id
+        WHERE s.is_active=1 AND s.expires_at<=? AND s.expires_at>=?
+      `).all(now_, now_ - 2 * 3600 * 1000);
+      for (const s of expired) {
+        const lang = s.lang || "ru", tx = I18N[lang] || I18N.ru;
+        const already = db.prepare("SELECT 1 FROM notified_expiry WHERE tg_id=? AND level='expired'").get(s.tg_id);
+        if (already) continue;
+        const kb = { inline_keyboard: [[{text:tx.btn_buy,callback_data:"v:buy"}]] };
+        tg("sendMessage",{chat_id:s.tg_id,text:tx.notify_expired(s.plan_title||s.plan_code),parse_mode:"HTML",reply_markup:kb}).catch(()=>{});
+        db.prepare("INSERT OR REPLACE INTO notified_expiry(tg_id,level,notified_at) VALUES(?,?,?)").run(s.tg_id,"expired",now_);
+        // Mark subscription inactive
+        db.prepare("UPDATE subscriptions SET is_active=0,updated_at=? WHERE tg_id=?").run(now_,s.tg_id);
+      }
+    } catch(e) { console.error("[ExpiryJob]", e.message); }
+  }
+  checkExpiry();
+  setInterval(checkExpiry, CHECK_INTERVAL);
+}
+
+// ── Admin: grant subscription directly ───────────────────────────────────────
+async function adminGrantSub(adminId, targetId, tariffCode, chatId, msgId) {
+  const tr = tariff(tariffCode);
+  const tu = user(targetId);
+  if (!tr || !tu) return;
+  const api = await createSubViaApi(tu, tr, false);
+  const subUrl = api.subscriptionUrl || api.sub_url || "";
+  if (!subUrl) throw new Error("API не вернул ссылку");
+  const exp = now() + tr.duration_days * 86400000;
+  db.transaction(()=>{
+    db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,devices,created_at,updated_at) VALUES(?,?,?,?,?,1,3,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,devices=excluded.devices,updated_at=excluded.updated_at")
+      .run(Number(targetId),tr.code,tr.title,subUrl,exp,now(),now());
+    db.prepare("DELETE FROM notified_expiry WHERE tg_id=?").run(Number(targetId));
+  })();
+  // Notify target user
+  const lang = getLang(targetId), rtx = I18N[lang]||I18N.ru;
+  tg("sendMessage",{
+    chat_id:targetId,
+    text:[rtx.admin_grant_rcvd(tr.title,tr.duration_days),"",`<code>${esc(subUrl)}</code>`].join("\n"),
+    parse_mode:"HTML",
+    reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,url:subUrl}]]},
+  }).catch(()=>{});
+  const name = tu.first_name||(tu.username?`@${tu.username}`:`ID ${targetId}`);
+  return { name, plan: tr.title };
+}
+
 function setAdminState(id,state,payload="") { db.prepare("INSERT INTO admin_states(admin_tg_id,state,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(admin_tg_id) DO UPDATE SET state=excluded.state,payload=excluded.payload,updated_at=excluded.updated_at").run(Number(id),state,String(payload),now()); }
 function getAdminState(id)                  { return db.prepare("SELECT * FROM admin_states WHERE admin_tg_id=?").get(Number(id)); }
 function clearAdminState(id)                { db.prepare("DELETE FROM admin_states WHERE admin_tg_id=?").run(Number(id)); }
 function setUserState(id,state,payload="")  { db.prepare("INSERT INTO user_states(tg_id,state,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(tg_id) DO UPDATE SET state=excluded.state,payload=excluded.payload,updated_at=excluded.updated_at").run(Number(id),state,String(payload),now()); }
 function getUserState(id)                   { return db.prepare("SELECT * FROM user_states WHERE tg_id=?").get(Number(id)); }
 function clearUserState(id)                 { db.prepare("DELETE FROM user_states WHERE tg_id=?").run(Number(id)); }
+
+// ── Prompt helpers (no reply keyboard — fully inline) ─────────────────────────
+// Sends a prompt message with an inline ❌ Отмена button.
+// Returns the sent message id so callers can delete/edit it later.
+async function sendPrompt(chatId, text, cancelCb="cancel:input", extraButtons=[]) {
+  const rows = [...extraButtons, [{text:"❌ Отмена", callback_data:cancelCb}]];
+  const m = await tg("sendMessage",{
+    chat_id: chatId, text, parse_mode:"HTML",
+    reply_markup:{inline_keyboard: rows},
+  });
+  return Number(m?.message_id||0);
+}
+
+// Delete a message silently (ignore errors — message may already be gone)
+function delMsg(chatId, msgId) {
+  if(!chatId||!msgId) return;
+  tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DB init + migrations
@@ -623,6 +784,42 @@ function init() {
     CREATE INDEX IF NOT EXISTS idx_fk_tg_id      ON freekassa_payments(tg_id);
     CREATE INDEX IF NOT EXISTS idx_fk_payment_id ON freekassa_payments(payment_id);
     CREATE INDEX IF NOT EXISTS idx_fk_status     ON freekassa_payments(status);
+    CREATE TABLE IF NOT EXISTS pending_orders(
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_id        INTEGER NOT NULL,
+      tariff_code  TEXT    NOT NULL,
+      kind         TEXT    NOT NULL DEFAULT 'new',
+      promo_code   TEXT    NOT NULL DEFAULT '',
+      promo_pct    INTEGER NOT NULL DEFAULT 0,
+      expires_at   INTEGER NOT NULL,
+      status       TEXT    NOT NULL DEFAULT 'pending',
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_tg_id  ON pending_orders(tg_id);
+    CREATE INDEX IF NOT EXISTS idx_po_status ON pending_orders(status);
+    CREATE TABLE IF NOT EXISTS promo_codes(
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      code        TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+      discount_pct INTEGER NOT NULL DEFAULT 10,
+      uses_max    INTEGER NOT NULL DEFAULT 0,
+      uses_current INTEGER NOT NULL DEFAULT 0,
+      is_active   INTEGER NOT NULL DEFAULT 1,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS promo_uses(
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_id       INTEGER NOT NULL,
+      promo_code  TEXT    NOT NULL,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_uses ON promo_uses(tg_id, promo_code);
+    CREATE TABLE IF NOT EXISTS notified_expiry(
+      tg_id       INTEGER NOT NULL,
+      level       TEXT    NOT NULL,
+      notified_at INTEGER NOT NULL,
+      PRIMARY KEY(tg_id, level)
+    );
   `);
 
   // Migrations — idempotent
@@ -632,6 +829,53 @@ function init() {
     "ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'",
     "ALTER TABLE users ADD COLUMN trial_used INTEGER NOT NULL DEFAULT 0",
   ]) { try { db.exec(m); } catch {} }
+
+  // New-tables migration — create them separately so existing DBs get them
+  // even if the main db.exec block ran without these tables before.
+  for (const sql of [
+    `CREATE TABLE IF NOT EXISTS pending_orders(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_id INTEGER NOT NULL, tariff_code TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'new', promo_code TEXT NOT NULL DEFAULT '',
+      promo_pct INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending', devices INTEGER NOT NULL DEFAULT 3,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS idx_po_tg_id ON pending_orders(tg_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_po_status ON pending_orders(status)`,
+    `CREATE TABLE IF NOT EXISTS promo_codes(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      discount_pct INTEGER NOT NULL DEFAULT 10,
+      uses_max INTEGER NOT NULL DEFAULT 0,
+      uses_current INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS promo_uses(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_id INTEGER NOT NULL, promo_code TEXT NOT NULL,
+      created_at INTEGER NOT NULL)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_uses ON promo_uses(tg_id, promo_code)`,
+    `CREATE TABLE IF NOT EXISTS notified_expiry(
+      tg_id INTEGER NOT NULL, level TEXT NOT NULL,
+      notified_at INTEGER NOT NULL, PRIMARY KEY(tg_id, level))`,
+  ]) { try { db.exec(sql); } catch {} }
+
+  // Verify promo_codes has id column; if not (corrupt schema), drop and recreate
+  try {
+    db.prepare("SELECT id FROM promo_codes LIMIT 1").get();
+  } catch {
+    try {
+      db.exec("DROP TABLE IF EXISTS promo_codes");
+      db.exec(`CREATE TABLE promo_codes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        discount_pct INTEGER NOT NULL DEFAULT 10,
+        uses_max INTEGER NOT NULL DEFAULT 0,
+        uses_current INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL)`);
+    } catch(e2) { console.error("[init] promo_codes recreate failed:", e2.message); }
+  }
 
   // Seed new settings into existing DBs (ON CONFLICT DO NOTHING keeps existing values)
   const ssNew = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING");
@@ -644,6 +888,7 @@ function init() {
   ssNew.run("fk_min_rub", String(FK_MIN_RUB_ENV || 50));
   ssNew.run("fk_notify_path", FK_PATH_NOTIFY_ENV || "/freekassa/notify");
   ssNew.run("fk_server_ip", String(FK_SERVER_IP_ENV || ""));
+  ssNew.run("devices_extra_price", "360");
 
   // Seed tariffs
   const st = db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(code) DO NOTHING");
@@ -671,19 +916,33 @@ function init() {
     ["fk_server_ip", String(FK_SERVER_IP_ENV || "")],
     // Configurable links
     ["url_support","https://t.me/dreinnvpnsupportbot"],["url_privacy",""],["url_terms",""],["url_proxy",""],["url_news",""],["url_status","https://dreinnvpn.vercel.app"],
+    // Direct payment: auto-complete pending order after topup
+    ["direct_payment_enabled","1"],
+    // Device count extra price (per device above 3)
+    ["devices_extra_price","360"],
   ];
   defaults.forEach(([k,v])=>ss.run(k,v));
+
+  // Migration: add devices column to subscriptions
+  try { db.exec("ALTER TABLE subscriptions ADD COLUMN devices INTEGER NOT NULL DEFAULT 3"); } catch {}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Telegram API
 // ─────────────────────────────────────────────────────────────────────────────
-async function tg(method, params) {
+async function tg(method, params, _retry=0) {
+  const isLongPoll = method === "getUpdates";
+  const timeoutMs  = isLongPoll ? 45000 : 30000; // long-poll needs > 30s
   const ctrl = new AbortController();
-  const tid = setTimeout(()=>ctrl.abort(), 30000);
+  const tid = setTimeout(()=>ctrl.abort(), timeoutMs);
   try {
     const r = await fetch(`${TG_BASE}/${method}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(params),signal:ctrl.signal});
     const j = await r.json().catch(()=>({}));
+    if(r.status===429&&_retry<3){
+      const ra=Number(j?.parameters?.retry_after||j?.retry_after||5);
+      await sleep((ra+1)*1000);
+      return tg(method,params,_retry+1);
+    }
     if(!r.ok||j.ok===false) throw new Error(j.description||`TG HTTP ${r.status}`);
     return j.result;
   } finally {
@@ -805,6 +1064,39 @@ async function checkCryptoInvoice(invoiceId) {
   return false;
 }
 
+function verifyCryptoBotWebhook(rawBody, headerToken) {
+  // CryptoBot sends "Crypto-Pay-API-Token" header with the bot token
+  return String(headerToken || "") === CRYPTOBOT_TOKEN;
+}
+
+async function handleCryptoBotWebhookPayload(body) {
+  try {
+    if (body.update_type !== "invoice_paid") return;
+    const inv = body.payload;
+    if (!inv || !inv.invoice_id) return;
+    const invoiceId = String(inv.invoice_id);
+    const cp = db.prepare("SELECT * FROM crypto_payments WHERE invoice_id=?").get(invoiceId);
+    if (!cp || cp.status !== "pending") return;
+    markCryptoPaid(cp.id);
+    updateBalance(cp.tg_id, cp.amount_rub);
+    const me = user(cp.tg_id), tx = T(cp.tg_id);
+    // Check if this payment was for a pending order
+    const po = getPendingOrderByUser(cp.tg_id);
+    if (po) {
+      closePendingOrder(po.id);
+      await completePurchaseAfterTopup(cp.tg_id, po).catch(()=>{});
+    } else {
+      tg("sendMessage",{
+        chat_id: cp.tg_id,
+        text: [tx.crypto_ok(cp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),
+        parse_mode: "HTML",
+        reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]},
+      }).catch(()=>{});
+    }
+    tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Crypto пополнение (webhook)</b>`,"",`${esc(me?.first_name||String(cp.tg_id))} (<code>${cp.tg_id}</code>)`,`Сумма: <b>${rub(cp.amount_rub)}</b>  (${cp.amount_usdt} USDT @ ${Number(cp.rate_rub).toFixed(2)} ₽)`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
+  } catch(e) { console.error("[CryptoBot webhook]", e.message); }
+}
+
 function createCryptoPaymentRow(tgId, amountRub, amountUsdt, rateRub, invoiceId, payUrl) {
   return db.prepare("INSERT INTO crypto_payments(tg_id,amount_rub,amount_usdt,rate_rub,invoice_id,pay_url,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)")
     .run(Number(tgId),Math.round(amountRub),amountUsdt,rateRub,invoiceId,payUrl,now(),now()).lastInsertRowid;
@@ -815,6 +1107,74 @@ function markCryptoCancelled(id) { db.prepare("UPDATE crypto_payments SET status
 function expireOldCryptoPayments(tgId) {
   db.prepare("UPDATE crypto_payments SET status='expired',updated_at=? WHERE tg_id=? AND status='pending' AND created_at<?")
     .run(now(),Number(tgId),now()-CRYPTO_INVOICE_TTL*1000);
+}
+
+function expireOldFkPayments(tgId) {
+  const cutoff = now() - 24 * 3600 * 1000; // FK orders expire after 24h
+  db.prepare("UPDATE freekassa_payments SET status='expired',updated_at=? WHERE tg_id=? AND status='pending' AND created_at<?")
+    .run(now(), Number(tgId), cutoff);
+}
+
+function expireOldPendingOrders() {
+  db.prepare("UPDATE pending_orders SET status='expired',updated_at=? WHERE status='pending' AND expires_at<?")
+    .run(now(), now());
+}
+
+// ── Pending orders (direct payment flow) ─────────────────────────────────────
+function createPendingOrder(tgId, tariffCode, kind="new", promoCd="", promoPct=0, devices=3) {
+  expireOldPendingOrders();
+  const expires = now() + 30 * 60 * 1000; // 30 min TTL
+  // Migration: add devices column if missing
+  try { db.exec("ALTER TABLE pending_orders ADD COLUMN devices INTEGER NOT NULL DEFAULT 3"); } catch {}
+  let id;
+  try {
+    id = db.prepare("INSERT INTO pending_orders(tg_id,tariff_code,kind,promo_code,promo_pct,expires_at,devices,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?)")
+      .run(Number(tgId),tariffCode,kind,promoCd,promoPct,expires,Number(devices)||3,now(),now()).lastInsertRowid;
+  } catch {
+    id = db.prepare("INSERT INTO pending_orders(tg_id,tariff_code,kind,promo_code,promo_pct,expires_at,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)")
+      .run(Number(tgId),tariffCode,kind,promoCd,promoPct,expires,now(),now()).lastInsertRowid;
+  }
+  return id;
+}
+function getPendingOrder(id)      { return db.prepare("SELECT * FROM pending_orders WHERE id=?").get(Number(id)); }
+function getPendingOrderByUser(tgId) {
+  return db.prepare("SELECT * FROM pending_orders WHERE tg_id=? AND status='pending' AND expires_at>? ORDER BY id DESC LIMIT 1").get(Number(tgId),now());
+}
+function closePendingOrder(id, status="done") {
+  db.prepare("UPDATE pending_orders SET status=?,updated_at=? WHERE id=?").run(status,now(),Number(id));
+}
+
+// ── Promo codes ───────────────────────────────────────────────────────────────
+function getPromo(code)    { return db.prepare("SELECT * FROM promo_codes WHERE code=? COLLATE NOCASE").get(String(code||"").trim()); }
+function hasUsedPromo(tgId, code) { return !!db.prepare("SELECT 1 FROM promo_uses WHERE tg_id=? AND promo_code=? COLLATE NOCASE").get(Number(tgId),String(code)); }
+function usePromo(tgId, code) {
+  db.prepare("INSERT OR IGNORE INTO promo_uses(tg_id,promo_code,created_at) VALUES(?,?,?)").run(Number(tgId),String(code).toUpperCase(),now());
+  db.prepare("UPDATE promo_codes SET uses_current=uses_current+1 WHERE code=? COLLATE NOCASE").run(String(code));
+}
+function validatePromo(tgId, code) {
+  // Each user may only use ONE promo code ever
+  const alreadyUsedAny = db.prepare("SELECT 1 FROM promo_uses WHERE tg_id=?").get(Number(tgId));
+  if (alreadyUsedAny) return { ok: false, reason: "used" };
+  const p = getPromo(code);
+  if (!p || !p.is_active) return { ok: false, reason: "invalid" };
+  if (p.uses_max > 0 && p.uses_current >= p.uses_max) return { ok: false, reason: "invalid" };
+  if (hasUsedPromo(tgId, code)) return { ok: false, reason: "used" };
+  return { ok: true, promo: p };
+}
+
+function calcPrice(basePrice, promoPct) {
+  if (!promoPct) return Number(basePrice);
+  return Math.max(1, Math.round(Number(basePrice) * (100 - promoPct) / 100));
+}
+
+// Device count helpers
+function devicesExtraPrice() { return Math.max(0, Number(setting("devices_extra_price","360"))||0); }
+function devicesSurcharge(devices) {
+  const extra = Math.max(0, Number(devices||3) - 3);
+  return extra * devicesExtraPrice();
+}
+function calcPriceWithDevices(basePrice, promoPct, devices) {
+  return calcPrice(Number(basePrice) + devicesSurcharge(devices), promoPct);
 }
 
 // FreeKassa API
@@ -942,7 +1302,11 @@ function parseBodyByContentType(raw, contentType) {
   if (ct.includes("application/json")) {
     try { return JSON.parse(raw || "{}"); } catch { return {}; }
   }
-  if (ct.includes("application/x-www-form-urlencoded")) return qs.parse(raw || "");
+  if (ct.includes("application/x-www-form-urlencoded")) {
+    const out = {};
+    try { new URLSearchParams(raw || "").forEach((v,k)=>{ out[k]=v; }); } catch {}
+    return out;
+  }
   if (ct.includes("multipart/form-data")) {
     const out = {};
     const boundaryMatch = ct.match(/boundary=([^;]+)/i);
@@ -960,7 +1324,9 @@ function parseBodyByContentType(raw, contentType) {
     }
     return out;
   }
-  return qs.parse(raw || "");
+  const out = {};
+  try { new URLSearchParams(raw || "").forEach((v,k)=>{ out[k]=v; }); } catch {}
+  return out;
 }
 function validateFkWebhookSign(p) {
   const sign = String(p.SIGN || p.sign || "").toLowerCase();
@@ -1120,7 +1486,7 @@ async function doTrial(uid, chatId, msgId) {
   if (!subUrl) { await tg("sendMessage",{chat_id:chatId,text:"❌ Ошибка API. Попробуйте позже."}); return; }
   const exp = now() + days * 86400000;
   db.transaction(()=>{
-    db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,updated_at=excluded.updated_at")
+    db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,devices,created_at,updated_at) VALUES(?,?,?,?,?,1,1,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,devices=1,updated_at=excluded.updated_at")
       .run(Number(uid),"trial",fakeTariff.title,subUrl,exp,now(),now());
     markTrialUsed(uid);
   })();
@@ -1131,14 +1497,14 @@ async function doTrial(uid, chatId, msgId) {
   setMenu(uid,chatId,nm);
 }
 // ─────────────────────────────────────────────────────────────────────────────
-async function createSubViaApi(target, tr, giftMode) {
+async function createSubViaApi(target, tr, giftMode, devices=3) {
   const ctrl = new AbortController();
   const tid  = setTimeout(()=>ctrl.abort(), 20000);
   try {
     const r = await fetch(`${API}/api/bot-subscription`,{
       method:"POST",
       headers:{"Content-Type":"application/json","x-app-secret":APP_SECRET},
-      body:JSON.stringify({telegramUserId:String(target.tg_id),telegramUsername:target.username||"",firstName:target.first_name||"",durationDays:tr.duration_days,name:`VPN ${tr.title}`,description:giftMode?`Подарок: ${tr.title}`:`Тариф: ${tr.title}`}),
+      body:JSON.stringify({telegramUserId:String(target.tg_id),telegramUsername:target.username||"",firstName:target.first_name||"",durationDays:tr.duration_days,name:`VPN ${tr.title}`,description:giftMode?`Подарок: ${tr.title}`:`Тариф: ${tr.title}`,devices:Number(devices)||3}),
       signal:ctrl.signal,
     });
     const j = await r.json().catch(()=>({}));
@@ -1152,22 +1518,51 @@ async function createSubViaApi(target, tr, giftMode) {
   }
 }
 
+// Called after balance credited — auto-complete pending order if user has enough balance
+async function completePurchaseAfterTopup(tgId, po) {
+  const u = user(tgId);
+  const tr = tariff(po.tariff_code);
+  if (!u || !tr) return;
+  const devCount = Number(po.devices||3)||3;
+  const finalPrice = calcPriceWithDevices(tr.price_rub, po.promo_pct, devCount);
+  if (Number(u.balance_rub) < finalPrice) return; // still not enough
+  const chatId = u.last_chat_id;
+  const msgId  = u.last_menu_id;
+  if (!chatId) return;
+  try {
+    await doPurchaseWithPromo(tgId, tgId, po.tariff_code, po.kind, po.promo_code, po.promo_pct, devCount);
+    const me = user(tgId), tx = T(tgId);
+    const s = sub(tgId);
+    await gif(chatId, "gif_purchase_success");
+    const lang = getLang(tgId);
+    const lines = [tx.success_title,"",tx.success_plan(tariffTitle(tr,lang)),tx.success_paid(finalPrice),tx.success_bal(me.balance_rub),tx.success_exp(dt(s?.expires_at,lang)),"",`<code>${esc(s?.sub_url||"")}</code>`];
+    await tg("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_connect,url:s?.sub_url||""}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
+  } catch(e) {
+    const tx = T(tgId);
+    tg("sendMessage",{chat_id:chatId,text:`❌ Не удалось оформить подписку: ${e.message}`}).catch(()=>{});
+  }
+}
+
 async function doPurchase(payerId, receiverId, code, kind) {
+  return doPurchaseWithPromo(payerId, receiverId, code, kind, "", 0, 3);
+}
+
+async function doPurchaseWithPromo(payerId, receiverId, code, kind, promoCd, promoPct, devices=3) {
   const payer=user(payerId), receiver=user(receiverId), tr=tariff(code);
   if(!payer||!receiver||!tr) throw new Error("INVALID");
   const s=sub(receiverId), act=activeSub(s);
   const receiverHasTrial = act && s.plan_code==="trial";
-  // Block "new" purchase only if active subscription is a PAID plan (not trial)
   if(kind==="new"   && act && !receiverHasTrial) throw new Error("ACTIVE");
   if(kind==="renew" && !act) throw new Error("NO_ACTIVE");
   if(kind==="gift"  && act)  throw new Error("ACTIVE");
-  if(Number(payer.balance_rub)<Number(tr.price_rub)) throw new Error("NO_MONEY");
+  const devCount = Math.max(1, Math.min(10, Number(devices)||3));
+  const finalPrice = calcPriceWithDevices(tr.price_rub, promoPct || 0, devCount);
+  if(Number(payer.balance_rub)<finalPrice) throw new Error("NO_MONEY");
 
-  const api    = await createSubViaApi(receiver,tr,kind==="gift");
+  const api    = await createSubViaApi(receiver,tr,kind==="gift",devCount);
   const subUrl = api.subscriptionUrl || api.sub_url || "";
   if(!subUrl) throw new Error("API не вернул ссылку подписки");
 
-  // ── FIX: Renewal adds days to existing expiry ──────────────────────────────
   let newExpiresAt;
   if (kind==="renew") {
     const base = (s && s.expires_at > now()) ? s.expires_at : now();
@@ -1176,66 +1571,168 @@ async function doPurchase(payerId, receiverId, code, kind) {
     const base = (s && s.expires_at > now()) ? s.expires_at : now();
     newExpiresAt = base + tr.duration_days * 86400000;
   } else if (kind==="new" && receiverHasTrial) {
-    // Buying a paid plan while trial is active → start fresh from now (trial is replaced)
     newExpiresAt = now() + tr.duration_days * 86400000;
   } else {
     newExpiresAt = Number(api.subscription?.expiresAt || api.expiresAt || (now() + tr.duration_days*86400000));
   }
-  // ──────────────────────────────────────────────────────────────────────────
 
   db.transaction(()=>{
-    updateBalance(payerId,-Number(tr.price_rub));
-    addReferralReward(payerId, tr.price_rub); // always reward referrer of payer
-    db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,updated_at=excluded.updated_at")
-      .run(Number(receiverId),tr.code,tr.title,subUrl,newExpiresAt,now(),now());
-    db.prepare("INSERT INTO purchases(tg_id,tariff_code,tariff_title,amount_rub,kind,created_at) VALUES(?,?,?,?,?,?)").run(Number(payerId),tr.code,tr.title,Number(tr.price_rub),kind,now());
-    if(kind==="gift") db.prepare("INSERT INTO gifts(from_tg_id,to_tg_id,tariff_code,tariff_title,amount_rub,created_at) VALUES(?,?,?,?,?,?)").run(Number(payerId),Number(receiverId),tr.code,tr.title,Number(tr.price_rub),now());
+    updateBalance(payerId,-finalPrice);
+    addReferralReward(payerId, finalPrice);
+    if(promoCd) usePromo(payerId, promoCd);
+    db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,devices,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,devices=excluded.devices,updated_at=excluded.updated_at")
+      .run(Number(receiverId),tr.code,tr.title,subUrl,newExpiresAt,devCount,now(),now());
+    db.prepare("INSERT INTO purchases(tg_id,tariff_code,tariff_title,amount_rub,kind,created_at) VALUES(?,?,?,?,?,?)").run(Number(payerId),tr.code,tr.title,finalPrice,kind,now());
+    if(kind==="gift") db.prepare("INSERT INTO gifts(from_tg_id,to_tg_id,tariff_code,tariff_title,amount_rub,created_at) VALUES(?,?,?,?,?,?)").run(Number(payerId),Number(receiverId),tr.code,tr.title,finalPrice,now());
   })();
-  return {tr, url:subUrl, exp:newExpiresAt};
+  // Reset expiry notification so user gets reminded again when new sub nears expiry
+  db.prepare("DELETE FROM notified_expiry WHERE tg_id=?").run(Number(receiverId));
+  return {tr, url:subUrl, exp:newExpiresAt, finalPrice, devices:devCount};
 }
 
-async function buySelf(uid, chatId, msgId, code, mode, cbid) {
+async function buySelf(uid, chatId, msgId, code, mode, cbid, promoCd="", promoPct=0, devices=3) {
   try {
-    const res=await doPurchase(uid,uid,code,mode);
+    const res=await doPurchaseWithPromo(uid,uid,code,mode,promoCd,promoPct,devices);
     await gif(chatId,"gif_purchase_success");
-    const me=user(uid), tx=T(uid);
-    const lines=[tx.success_title,"",tx.success_plan(tariffTitle(res.tr,getLang(uid))),tx.success_paid(res.tr.price_rub),tx.success_bal(me.balance_rub),tx.success_exp(res.exp),"",`<code>${esc(res.url)}</code>`];
+    const me=user(uid), tx=T(uid), lang=getLang(uid);
+    const lines=[tx.success_title,"",tx.success_plan(tariffTitle(res.tr,lang)),tx.success_paid(res.finalPrice),tx.success_bal(me.balance_rub),tx.success_exp(dt(res.exp,lang)),"",`<code>${esc(res.url)}</code>`];
     const kb={inline_keyboard:[[{text:tx.btn_connect,url:res.url}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]};
     const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("sub"));
     setMenu(uid,chatId,nm);
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:"✅"});
   } catch(e) {
-    const tx=T(uid);
     const map={ACTIVE:getLang(uid)==="en"?"Already active. Choose Renew.":"Подписка уже активна.",NO_ACTIVE:getLang(uid)==="en"?"No active sub to renew.":"Нет активной подписки для продления.",NO_MONEY:getLang(uid)==="en"?"Insufficient balance.":"Недостаточно средств."};
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:map[e.message]||e.message,show_alert:true});
-    if(e.message==="NO_MONEY") await render(uid,chatId,msgId,"topup");
+    if(e.message==="NO_MONEY") {
+      // Show direct payment options instead of just redirecting to topup
+      await showDirectPayment(uid, chatId, msgId, code, mode, promoCd, promoPct, devices);
+    }
   }
 }
 
-async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid) {
-  const tr=tariff(code); if(!tr){await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
-  const u=user(uid), tx=T(uid), lang=getLang(uid), diff=Number(u.balance_rub)-Number(tr.price_rub);
+// Show direct payment screen when balance is insufficient
+async function showDirectPayment(uid, chatId, msgId, code, mode, promoCd="", promoPct=0, devices=3) {
+  const tr=tariff(code); if(!tr) return;
+  const u=user(uid), tx=T(uid), lang=getLang(uid);
+  const devCount=Math.max(1,Math.min(10,Number(devices)||3));
+  const finalPrice = calcPriceWithDevices(tr.price_rub, promoPct, devCount);
+  const rows=[];
+  const poId = createPendingOrder(uid, code, mode, promoCd, promoPct, devCount);
+  if(CRYPTOBOT_TOKEN){
+    rows.push([{text:tx.btn_pay_crypto,callback_data:`direct:crypto:${poId}`}]);
+  }
+  if(isFkEnabled()){
+    rows.push([{text:tx.btn_pay_qr,   callback_data:`direct:fk:${poId}:44`}]);
+    rows.push([{text:tx.btn_pay_card, callback_data:`direct:fk:${poId}:36`}]);
+    rows.push([{text:tx.btn_pay_sber, callback_data:`direct:fk:${poId}:43`}]);
+  }
+  rows.push([{text:tx.btn_back,callback_data:"v:buy"}]);
+  const planName=tariffTitle(tr,lang);
+  const surcharge=devicesSurcharge(devCount);
+  const lines=[
+    tx.direct_no_bal(rub(finalPrice), rub(u.balance_rub)),
+    "",
+    `<b>${planName}</b> — <b>${rub(finalPrice)}</b>`,
+    ...(surcharge?[tx.dev_surcharge(surcharge)]:[]),
+    ...(promoPct?[tx.promo_applied(promoPct)]:[]),
+  ];
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),{inline_keyboard:rows},viewImg("buy"));
+  setMenu(uid,chatId,nm);
+}
+
+// ── Device selector ───────────────────────────────────────────────────────────
+async function showDeviceSelector(uid, chatId, msgId, code, mode, selectedDevices=3) {
+  const tr=tariff(code); if(!tr) return;
+  const tx=T(uid), lang=getLang(uid);
+  const devCount=Math.max(1,Math.min(10,Number(selectedDevices)||3));
+  const basePrice=tr.price_rub;
+  const surcharge=devicesSurcharge(devCount);
+  const totalPrice=basePrice+surcharge;
+  const extraPrice=devicesExtraPrice();
+  // Show 10 device buttons in a 2-column grid
+  const devRows=[];
+  for(let i=1;i<=10;i+=2){
+    const row=[];
+    for(const d of [i,i+1]){
+      if(d>10) break;
+      const isSelected=d===devCount;
+      row.push({text:`${d} устр.${isSelected?" ✅":""}`,callback_data:`dev:${code}:${mode}:${d}`});
+    }
+    devRows.push(row);
+  }
+  const lines=[
+    tx.dev_title,"",
+    tx.dev_base(3),
+    tx.dev_now(devCount),
+    ...(surcharge?[tx.dev_surcharge(surcharge)]:[]),
+    tx.dev_price(totalPrice),"",
+    tx.dev_hint,
+  ];
+  const kb={inline_keyboard:[
+    ...devRows,
+    [{text:tx.dev_pay(totalPrice),callback_data:`dev:pay:${code}:${mode}:${devCount}`}],
+    [{text:tx.btn_back,callback_data:"v:buy"}],
+  ]};
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("buy"));
+  setMenu(uid,chatId,nm);
+}
+
+async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid, promoCd="", promoPct=0, devices=3) {
+  const tr=tariff(code); if(!tr){if(cbid)await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
+  const u=user(uid), tx=T(uid), lang=getLang(uid);
+  const devCount=Math.max(1,Math.min(10,Number(devices)||3));
+  const finalPrice = calcPriceWithDevices(tr.price_rub, promoPct, devCount);
+  const surcharge=devicesSurcharge(devCount);
+  const diff=Number(u.balance_rub)-finalPrice;
   const trialActive=isTrialSub(uid);
   const extendNote = trialActive
     ? (lang==="en"
-        ? `<i>⚠️ Your free trial will be replaced. New expiry: ${dt(now() + tr.duration_days*86400000)}</i>`
-        : `<i>⚠️ Пробный период будет заменён. Новый срок: ${dt(now() + tr.duration_days*86400000)}</i>`)
+        ? `<i>⚠️ Your free trial will be replaced. New expiry: ${dt(now() + tr.duration_days*86400000,lang)}</i>`
+        : `<i>⚠️ Пробный период будет заменён. Новый срок: ${dt(now() + tr.duration_days*86400000,lang)}</i>`)
     : null;
   const lines=[
     tx.confirm_title(mode),"",
     tx.confirm_plan(tariffTitle(tr,lang)),
-    tx.confirm_price(tr.price_rub),
+    tx.confirm_price(finalPrice),
+    ...(surcharge?[tx.dev_surcharge(surcharge)]:[]),
+    ...(promoPct?[tx.promo_applied(promoPct)]:[]),
     tx.confirm_bal(u.balance_rub),
     tx.confirm_after(Math.max(0,diff)),"",
     ...(extendNote ? [extendNote,""] : []),
     diff<0?tx.confirm_low:tx.confirm_ok,
   ];
-  const kb=diff<0
-    ?{inline_keyboard:[[{text:tx.btn_topup,callback_data:"v:topup"}],[{text:tx.btn_back,callback_data:"v:home"}]]}
-    :{inline_keyboard:[[{text:tx.btn_confirm,callback_data:`pay:c:${mode}:${code}`}],[{text:tx.btn_cancel,callback_data:"v:home"}]]};
+  // Promo code button — shown in both branches (with/without balance)
+  const hasUsedAnyPromo = !!db.prepare("SELECT 1 FROM promo_uses WHERE tg_id=?").get(Number(uid));
+  const promoBtn = promoCd
+    ? [{text:`🎟 ${promoCd} (${promoPct}%)`, callback_data:"noop"}]
+    : hasUsedAnyPromo
+      ? [] // user already used a promo code ever — hide button
+      : [{text:tx.btn_promo, callback_data:`promo:ask:${code}:${mode}:${devCount}`}];
+
+  let kb;
+  if(diff<0){
+    // Not enough balance — show promo button FIRST, then payment options
+    const poId = createPendingOrder(uid, code, mode, promoCd, promoPct, devCount);
+    const payRows=[];
+    if(promoBtn.length) payRows.push(promoBtn); // promo at the top
+    if(CRYPTOBOT_TOKEN) payRows.push([{text:tx.btn_pay_crypto,callback_data:`direct:crypto:${poId}`}]);
+    if(isFkEnabled()){
+      payRows.push([{text:tx.btn_pay_qr,   callback_data:`direct:fk:${poId}:44`}]);
+      payRows.push([{text:tx.btn_pay_card, callback_data:`direct:fk:${poId}:36`}]);
+      payRows.push([{text:tx.btn_pay_sber, callback_data:`direct:fk:${poId}:43`}]);
+    }
+    payRows.push([{text:tx.btn_topup,callback_data:"v:topup"},{text:tx.btn_back,callback_data:"v:home"}]);
+    kb={inline_keyboard:payRows};
+  } else {
+    const rows=[];
+    if(promoBtn.length) rows.push(promoBtn);
+    rows.push([{text:tx.btn_confirm,callback_data:`pay:c:${mode}:${code}:${promoCd}:${promoPct}:${devCount}`}]);
+    rows.push([{text:tx.btn_cancel,callback_data:"v:home"}]);
+    kb={inline_keyboard:rows};
+  }
   const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("buy"));
   setMenu(uid,chatId,nm);
-  await tg("answerCallbackQuery",{callback_query_id:cbid});
+  if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid});
 }
 
 // Gift: confirmation step before sending
@@ -1285,7 +1782,7 @@ async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
     setMenu(fromId,chatId,nm);
     if(to){
       const rtx=T(to.tg_id);
-      tg("sendMessage",{chat_id:to.tg_id,text:[rtx.gift_rcvd,"",rtx.gift_plan(res.tr.title),`${rtx.sub_exp(res.exp)}`,"",`<code>${esc(res.url)}</code>`].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,url:res.url}]]}}).catch(()=>{});
+      tg("sendMessage",{chat_id:to.tg_id,text:[rtx.gift_rcvd,"",rtx.gift_plan(res.tr.title),`${rtx.sub_exp(dt(res.exp,getLang(to.tg_id)))}`,`\n<code>${esc(res.url)}</code>`].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,url:res.url}]]}}).catch(()=>{});
     }
     if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"🎁"});
   } catch(e) {
@@ -1441,10 +1938,12 @@ function profileText(uid) {
 }
 
 function subText(uid) {
-  const tx=T(uid), s=sub(uid);
+  const tx=T(uid), s=sub(uid), lang=getLang(uid);
   if(!activeSub(s)) return [tx.sub_title,"",tx.sub_none].join("\n");
   const ms=Math.max(0,s.expires_at-now()), dd=Math.floor(ms/86400000), hh=Math.floor((ms%86400000)/3600000), mm=Math.floor((ms%3600000)/60000);
-  return [tx.sub_title,"",tx.sub_plan(s.plan_title||s.plan_code||"—"),tx.sub_exp(s.expires_at),tx.sub_left(dd,hh,mm),`<i>${tx.sub_devices}</i>`,"",`${tx.sub_link_hdr}\n<code>${esc(s.sub_url)}</code>`].join("\n");
+  const devCount=Number(s.devices||3)||3;
+  const devLabel=lang==="en"?`Up to ${devCount} device${devCount>1?"s":""}`:`До ${devCount} устройств`;
+  return [tx.sub_title,"",tx.sub_plan(s.plan_title||s.plan_code||"—"),tx.sub_exp(dt(s.expires_at,lang)),tx.sub_left(dd,hh,mm),`<i>${devLabel}</i>`,"",`${tx.sub_link_hdr}\n<code>${esc(s.sub_url)}</code>`].join("\n");
 }
 
 // Translate tariff title to English if needed
@@ -1550,7 +2049,7 @@ function refHistoryText(uid, page=0) {
     lines.push(`+<b>${rub(r.reward_rub)}</b>  <i>(${r.percent}% от ${rub(r.amount_rub)})</i>`);
     lines.push(`   <i>${dt(r.created_at)}</i>`);
   }
-  lines.push("",`Стр. ${page+1}/${Math.max(1,Math.ceil(total/size))}`);
+  lines.push("",tx.rh_page(page,Math.max(1,Math.ceil(total/size))));
   return{text:lines.join("\n"),total,page,size};
 }
 
@@ -1733,16 +2232,64 @@ async function render(uid, chatId, msgId, view, data={}) {
         [{text:"🤝 Реф. процент",callback_data:"a:r"},{text:"📋 Инструкция",callback_data:"a:guide_edit"}],
         [{text:"📢 Канал + Пробный период",callback_data:"a:channel"}],
         [{text:"💳 FreeKassa",callback_data:"a:fk"}],
-        [{text:"🔍 Поиск юзера",callback_data:"a:find"}],
-        [{text:"🗄 База данных",callback_data:"a:db"}],
+        [{text:"🎟 Промокоды",callback_data:"a:promo"},{text:"🔍 Поиск юзера",callback_data:"a:find"}],
+        [{text:"👥 Пользователи",callback_data:"a:users:0"},{text:"🗄 База данных",callback_data:"a:db"}],
         [{text:"« Назад",callback_data:"v:home"}],
       ]};
       break;
     }
 
+    case "a_promo": {
+      const promos = db.prepare("SELECT * FROM promo_codes ORDER BY rowid DESC LIMIT 20").all();
+      const lines = ["<b>Промокоды</b>",""];
+      if (!promos.length) lines.push("<i>Промокодов нет.</i>");
+      else promos.forEach(p=>{
+        const status = p.is_active ? "✅" : "❌";
+        const uses = p.uses_max > 0 ? `${p.uses_current}/${p.uses_max}` : `${p.uses_current}/∞`;
+        lines.push(`${status} <code>${esc(p.code)}</code> — <b>${p.discount_pct}%</b>  (${uses})`);
+      });
+      text=lines.join("\n");
+      kb={inline_keyboard:[
+        [{text:"➕ Добавить промокод",callback_data:"a:promo_add"}],
+        [{text:"🗑 Деактивировать",callback_data:"a:promo_del"}],
+        [{text:"« Назад",callback_data:"a:main"}],
+      ]};
+      break;
+    }
+
+    case "a_users": {
+      const page=Number(data.page||0), size=10, off=page*size;
+      const rows=db.prepare("SELECT u.*,(SELECT is_active FROM subscriptions s WHERE s.tg_id=u.tg_id AND s.is_active=1) as sub_active FROM users u ORDER BY u.created_at DESC LIMIT ? OFFSET ?").all(size,off);
+      const total=Number(db.prepare("SELECT COUNT(*) c FROM users").get().c||0);
+      const lines=["<b>Пользователи</b>",""];
+      rows.forEach(u=>{
+        const subMark=u.sub_active?"⭐":"";
+        lines.push(`${subMark} <code>${u.tg_id}</code> ${esc(u.first_name||"")}${u.username?` @${esc(u.username)}`:""}`);
+      });
+      text=lines.join("\n");
+      const nav=[];
+      if(page>0)nav.push({text:"◀",callback_data:`a:users:${page-1}`});
+      nav.push({text:`${page+1}/${Math.ceil(total/size)||1}`,callback_data:"noop"});
+      if((page+1)*size<total)nav.push({text:"▶",callback_data:`a:users:${page+1}`});
+      kb={inline_keyboard:[nav,[{text:"« Назад",callback_data:"a:main"}]]};
+      break;
+    }
+
+    case "a_grant": {
+      const targetId=Number(data.id||0);
+      if(!targetId){text="Ошибка: ID не передан.";kb={inline_keyboard:[[{text:"« Назад",callback_data:"a:main"}]]};break;}
+      const gtu=user(targetId);
+      text=`<b>Выдать подписку</b>\n\nПользователь: ${gtu?esc(gtu.first_name||String(targetId)):String(targetId)} (<code>${targetId}</code>)\n\nВыберите тариф:`;
+      kb={inline_keyboard:[
+        ...tariffs().map(t=>[{text:`${t.title} (${t.duration_days} дн.)`,callback_data:`a:grant_ok:${targetId}:${t.code}`}]),
+        [{text:"« Назад",callback_data:`a:user_back:${targetId}`}],
+      ]};
+      break;
+    }
+
     case "a_tariffs":
-      text=`<b>Цены тарифов</b>\n\n${tariffs().map(x=>`${x.title}: <b>${rub(x.price_rub)}</b>`).join("\n")}`;
-      kb={inline_keyboard:[...tariffs().map(x=>[{text:`✏️ ${x.title} — ${rub(x.price_rub)}`,callback_data:`a:te:${x.code}`}]),[{text:"« Назад",callback_data:"a:main"}]]};
+      text=`<b>Цены тарифов</b>\n\n${tariffs().map(x=>`${x.title}: <b>${rub(x.price_rub)}</b>`).join("\n")}\n\n<i>Доп. устройства (от 4+): +${rub(devicesExtraPrice())} за каждое</i>`;
+      kb={inline_keyboard:[...tariffs().map(x=>[{text:`✏️ ${x.title} — ${rub(x.price_rub)}`,callback_data:`a:te:${x.code}`}]),[{text:`⚙️ Цена за доп. устройство — ${rub(devicesExtraPrice())}`,callback_data:"a:dev_price"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_gif":
       text="<b>GIF-анимации</b>\n\nНастройте анимации для событий:";
@@ -1785,6 +2332,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       const ts=sub(tu.tg_id), hasSub=ts&&activeSub(ts);
       kb={inline_keyboard:[
         [{text:"➕ Пополнить баланс",callback_data:`a:bal_add:${tu.tg_id}`}],
+        [{text:"🎁 Выдать подписку",callback_data:`a:grant:${tu.tg_id}`}],
         ...(hasSub?[[{text:"🚫 Отобрать подписку",callback_data:`a:sub_revoke:${tu.tg_id}`}]]:[]),
         [{text:"« Назад",callback_data:"a:main"}],
       ]};
@@ -1856,19 +2404,31 @@ async function startCryptoTopup(uid, chatId) {
   expireOldCryptoPayments(uid);
   const rate=await getUsdtRate(), tx=T(uid);
   const text=[tx.crypto_title,"",tx.crypto_desc,tx.crypto_min(CRYPTO_MIN_RUB),tx.crypto_rate(rate),"",tx.crypto_enter].join("\n");
-  await tg("sendMessage",{chat_id:chatId,text,parse_mode:"HTML",reply_markup:{keyboard:[[{text:"Отмена"}]],resize_keyboard:true,one_time_keyboard:true}});
-  setUserState(uid,"topup_crypto_amount","");
+  const promptId = await sendPrompt(chatId, text, "cancel:topup_crypto");
+  // Store prompt msg id so we can delete it when user replies
+  setUserState(uid,"topup_crypto_amount",String(promptId));
 }
 
-async function handleCryptoAmount(uid, chatId, text) {
+async function handleCryptoAmount(uid, chatId, text, promptMsgId, userMsgId) {
   const amount=Math.round(parseFloat(text.replace(/[^\d.]/g,""))||0);
   const tx=T(uid);
+  // Always delete user's typed message
+  delMsg(chatId, userMsgId);
   if(!amount||amount<CRYPTO_MIN_RUB){
-    await tg("sendMessage",{chat_id:chatId,text:`❌ ${tx.crypto_min(CRYPTO_MIN_RUB)}`,parse_mode:"HTML"});
+    // Edit the prompt to show the error, keep cancel button
+    if(promptMsgId) {
+      await tg("editMessageText",{
+        chat_id:chatId, message_id:promptMsgId,
+        text:`❌ ${tx.crypto_min(CRYPTO_MIN_RUB)}\n\n${tx.crypto_enter}`,
+        parse_mode:"HTML",
+        reply_markup:{inline_keyboard:[[{text:"❌ Отмена",callback_data:"cancel:topup_crypto"}]]},
+      }).catch(()=>{});
+    }
     return;
   }
   clearUserState(uid);
-  await tg("sendMessage",{chat_id:chatId,text:"⏳",reply_markup:{remove_keyboard:true}});
+  // Delete the prompt message
+  delMsg(chatId, promptMsgId);
   const inv=await createCryptoInvoice(amount);
   if(!inv){
     await tg("sendMessage",{chat_id:chatId,text:"❌ CryptoBot недоступен. Попробуйте позже."});
@@ -1884,45 +2444,47 @@ async function handleCryptoAmount(uid, chatId, text) {
 }
 
 async function startFkTopup(uid, chatId, methodId) {
+  expireOldFkPayments(uid);
   const tx = T(uid);
   const method = Number(methodId);
   const minRub = fkMinRub();
-  setUserState(uid, "topup_fk_amount", String(method));
   const methodName = methodTitle(method, getLang(uid));
-  const text = [
-    tx.fk_title(methodName),
-    tx.fk_min(minRub),
-    "",
-    tx.fk_enter,
-  ].join("\n");
-  await tg("sendMessage", {
-    chat_id: chatId,
-    text,
-    parse_mode: "HTML",
-    reply_markup: { keyboard: [[{ text: "Отмена" }]], resize_keyboard: true, one_time_keyboard: true },
-  });
+  const text = [tx.fk_title(methodName), tx.fk_min(minRub), "", tx.fk_enter].join("\n");
+  const promptId = await sendPrompt(chatId, text, `cancel:topup_fk:${method}`);
+  setUserState(uid, "topup_fk_amount", `${method}:${promptId}`);
 }
 
-async function handleFkAmount(uid, chatId, text, methodId) {
+async function handleFkAmount(uid, chatId, text, methodId, promptMsgId, userMsgId) {
   const tx = T(uid);
   const minRub = fkMinRub();
   const serverIp = fkServerIp();
+  // Always delete user's typed message
+  delMsg(chatId, userMsgId);
   if (!isFkEnabled()) {
+    delMsg(chatId, promptMsgId);
     await tg("sendMessage", { chat_id: chatId, text: "❌ Способ пополнения временно недоступен." });
     return;
   }
   const amount = Math.round(parseFloat(String(text).replace(/[^\d.]/g, "")) || 0);
   if (!amount || amount < minRub) {
-    await tg("sendMessage", { chat_id: chatId, text: `❌ ${tx.fk_min(minRub)}`, parse_mode: "HTML" });
+    if(promptMsgId) {
+      await tg("editMessageText",{
+        chat_id:chatId, message_id:promptMsgId,
+        text:`❌ ${tx.fk_min(minRub)}\n\n${tx.fk_enter}`,
+        parse_mode:"HTML",
+        reply_markup:{inline_keyboard:[[{text:"❌ Отмена",callback_data:`cancel:topup_fk:${methodId}`}]]},
+      }).catch(()=>{});
+    }
     return;
   }
   if (!serverIp) {
-    await tg("sendMessage", { chat_id: chatId, text: "❌ Внешний IP не определен. Перезапустите бота или задайте FREEKASSA_SERVER_IP." });
+    delMsg(chatId, promptMsgId);
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Внешний IP не определен. Перезапустите бота." });
     return;
   }
   clearUserState(uid);
-  await tg("sendMessage", { chat_id: chatId, text: "⏳", reply_markup: { remove_keyboard: true } });
-  const email = `${uid}@telegram.org`;
+  delMsg(chatId, promptMsgId);
+  const email = `user${uid}@${FK_EMAIL_DOMAIN}`;
   let order;
   try {
     order = await createFkOrder({ uid, amountRub: amount, methodId, email, ip: serverIp });
@@ -1967,6 +2529,9 @@ async function handleAdminState(msg) {
   const row=getAdminState(aid); if(!row) return false;
   const text=String(msg.text||"").trim(), chatId=Number(msg.chat?.id||0);
 
+  // Delete admin's typed message for clean flow
+  delMsg(chatId, Number(msg.message_id||0));
+
   if(text==="/cancel"){clearAdminState(aid);await render(aid,chatId,user(aid)?.last_menu_id||null,"a_main");return true;}
 
   switch(row.state){
@@ -1986,6 +2551,13 @@ async function handleAdminState(msg) {
       db.prepare("UPDATE tariffs SET price_rub=? WHERE code=?").run(Math.round(n),row.payload);
       clearAdminState(aid);
       await tg("sendMessage",{chat_id:chatId,text:`✅ Цена: ${rub(Math.round(n))}`});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_tariffs"); return true;
+    }
+    case "dev_extra_price": {
+      const n=Number(text);
+      if(!Number.isFinite(n)||n<0){await tg("sendMessage",{chat_id:chatId,text:"Введите число >= 0."});return true;}
+      setSetting("devices_extra_price",String(Math.round(n))); clearAdminState(aid);
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Цена за доп. устройство: ${rub(Math.round(n))}`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_tariffs"); return true;
     }
     case "gif": {
@@ -2146,6 +2718,32 @@ async function handleAdminState(msg) {
       await tg("sendMessage",{chat_id:chatId,text:`✅ webhook path: <code>${esc(p)}</code>`,parse_mode:"HTML"});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_fk"); return true;
     }
+
+    case "promo_add": {
+      const parts = text.trim().split(/\s+/);
+      if (parts.length < 2) { await tg("sendMessage",{chat_id:chatId,text:"Неверный формат. Пример: SALE10 10 100"}); return true; }
+      const promoCode = parts[0].toUpperCase();
+      const pct = parseInt(parts[1], 10);
+      const maxUses = parts[2] ? parseInt(parts[2], 10) : 0;
+      if (!promoCode || isNaN(pct) || pct < 1 || pct > 99) { await tg("sendMessage",{chat_id:chatId,text:"Скидка должна быть от 1 до 99%"}); return true; }
+      try {
+        db.prepare("INSERT INTO promo_codes(code,discount_pct,uses_max,uses_current,is_active,created_at) VALUES(?,?,?,0,1,?) ON CONFLICT(code) DO UPDATE SET discount_pct=excluded.discount_pct,uses_max=excluded.uses_max,is_active=1")
+          .run(promoCode, pct, maxUses||0, now());
+        clearAdminState(aid);
+        await tg("sendMessage",{chat_id:chatId,text:`✅ Промокод <code>${esc(promoCode)}</code> — <b>${pct}%</b> (макс. ${maxUses||"∞"})`,parse_mode:"HTML"});
+        await render(aid,chatId,user(aid)?.last_menu_id||null,"a_promo");
+      } catch(e) { await tg("sendMessage",{chat_id:chatId,text:`❌ Ошибка: ${e.message}`}); }
+      return true;
+    }
+
+    case "promo_deactivate": {
+      const code = text.trim().toUpperCase();
+      const res = db.prepare("UPDATE promo_codes SET is_active=0 WHERE code=? COLLATE NOCASE").run(code);
+      clearAdminState(aid);
+      if (res.changes) await tg("sendMessage",{chat_id:chatId,text:`✅ Промокод <code>${esc(code)}</code> деактивирован.`,parse_mode:"HTML"});
+      else await tg("sendMessage",{chat_id:chatId,text:"❌ Промокод не найден."});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_promo"); return true;
+    }
   } // end switch
   return false;
 } // end handleAdminState
@@ -2156,16 +2754,21 @@ async function handleAdminState(msg) {
 async function handleMessage(msg) {
   const from=msg.from||{}, chatId=Number(msg.chat?.id||0);
   if(!chatId||!from.id) return;
-  // Ignore messages from group/supergroup/channel chats — bot is private-only
   if(msg.chat?.type!=="private") return;
   upsertUser(from,chatId);
   const ustate=getUserState(from.id);
   const text=String(msg.text||"").trim();
+  const userMsgId=Number(msg.message_id||0);
 
-  // Universal cancel
-  if((text==="Отмена"||text==="Cancel")&&ustate){
+  // ── Always delete the user's message when in an input state ──────────────
+  if(ustate) delMsg(chatId, userMsgId);
+
+  // Universal /cancel command
+  if(text==="/cancel"&&ustate){
     clearUserState(from.id);
-    await tg("sendMessage",{chat_id:chatId,text:"✕",reply_markup:{remove_keyboard:true}});
+    // parse promptId from payload (always last segment after last colon-group)
+    const promptId=Number((ustate.payload||"").split(":").pop())||0;
+    delMsg(chatId, promptId);
     const view=(ustate.state==="topup_crypto_amount"||ustate.state==="topup_fk_amount")?"topup":"home";
     await render(from.id,chatId,user(from.id)?.last_menu_id||null,view);
     return;
@@ -2174,25 +2777,44 @@ async function handleMessage(msg) {
   // Crypto topup amount
   if(ustate?.state==="topup_crypto_amount"){
     if(!msg.text||msg.text.startsWith("/")) return;
-    await handleCryptoAmount(from.id,chatId,text); return;
+    const promptMsgId=Number(ustate.payload||0);
+    await handleCryptoAmount(from.id,chatId,text,promptMsgId,userMsgId); return;
   }
   if(ustate?.state==="topup_fk_amount"){
     if(!msg.text||msg.text.startsWith("/")) return;
-    const methodId = Number(ustate.payload || 44);
-    await handleFkAmount(from.id,chatId,text,methodId); return;
+    const parts=(ustate.payload||"").split(":");
+    const methodId=Number(parts[0]||44), promptMsgId=Number(parts[1]||0);
+    await handleFkAmount(from.id,chatId,text,methodId,promptMsgId,userMsgId); return;
   }
 
-
-
-  // ref_withdraw_amount state removed — referral rewards go to main balance directly
+  // Promo code entry
+  if(ustate?.state==="promo_input"){
+    if(!msg.text||msg.text.startsWith("/")) return;
+    const parts = (ustate.payload||"").split(":");
+    const code2=parts[0], mode2=parts[1], devices2=Number(parts[2]||3), promptMsgId=Number(parts[3]||0);
+    clearUserState(from.id);
+    delMsg(chatId, promptMsgId);
+    const result = validatePromo(from.id, text.trim());
+    const tx2 = T(from.id);
+    if(!result.ok){
+      const errMsg = result.reason==="used" ? tx2.promo_used : tx2.promo_invalid;
+      await tg("sendMessage",{chat_id:chatId,text:errMsg,parse_mode:"HTML"});
+      await askBuyConfirm(from.id,chatId,user(from.id)?.last_menu_id||null,code2,mode2,"","",0,devices2);
+      return;
+    }
+    const pct = result.promo.discount_pct;
+    await tg("sendMessage",{chat_id:chatId,text:tx2.promo_ok(pct,text.trim().toUpperCase()),parse_mode:"HTML"});
+    await askBuyConfirm(from.id,chatId,user(from.id)?.last_menu_id||null,code2,mode2,null,text.trim().toUpperCase(),pct,devices2);
+    return;
+  }
 
   // Gift recipient ID entry
   if(ustate?.state==="gift_recipient_id"){
     if(!msg.text||msg.text.startsWith("/")) return;
-    const code=ustate.payload||"";
+    const parts=(ustate.payload||"").split(":");
+    const code=parts[0], promptMsgId=Number(parts[1]||0);
     clearUserState(from.id);
-    // Remove reply keyboard first
-    await tg("sendMessage",{chat_id:chatId,text:"✕",reply_markup:{remove_keyboard:true}}).catch(()=>{});
+    delMsg(chatId, promptMsgId);
     let found=null;
     if(/^\d+$/.test(text)) found=user(Number(text));
     if(!found&&text.startsWith("@")) found=db.prepare("SELECT * FROM users WHERE username=?").get(text.slice(1));
@@ -2200,16 +2822,17 @@ async function handleMessage(msg) {
       await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден. Попросите его нажать /start."});
       return;
     }
-    // Route through the standard confirm screen (edits the main inline menu)
     await askGiftConfirm(from.id, chatId, user(from.id)?.last_menu_id||null, code, found.tg_id, null);
     return;
   }
 
   // Gift: system picker result
   if(msg.user_shared&&ustate?.state==="gift_pick"){
-    const recipientId=Number(msg.user_shared.user_id||0), code=ustate.payload||"";
+    const parts=(ustate.payload||"").split(":");
+    const code=parts[0], promptMsgId=Number(parts[1]||0);
+    const recipientId=Number(msg.user_shared.user_id||0);
     clearUserState(from.id);
-    await tg("sendMessage",{chat_id:chatId,text:"✕",reply_markup:{remove_keyboard:true}}).catch(()=>{});
+    delMsg(chatId, promptMsgId);
     if(!user(recipientId)){await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не зарегистрирован. Попросите нажать /start."});return;}
     await askGiftConfirm(from.id, chatId, user(from.id)?.last_menu_id||null, code, recipientId, null);
     return;
@@ -2228,10 +2851,10 @@ async function handleMessage(msg) {
       const nb=updateBalance(tid,amt);
       await tg("sendMessage",{chat_id:chatId,text:`✅ Баланс <code>${p[1]}</code>: <b>${rub(nb)}</b>`,parse_mode:"HTML"}); return;
     }
-
   }
 
-  // Standard commands
+  // Standard commands — delete the /command message too for clean look
+  delMsg(chatId, userMsgId);
   if(text.startsWith("/start")){
     const m=text.match(/^\/start\s+partner_([a-zA-Z0-9]+)$/);
     if(m){const r=findRef(m[1]);if(r)setRef(from.id,r.tg_id);}
@@ -2241,10 +2864,26 @@ async function handleMessage(msg) {
     await gif(chatId,"gif_main_menu");
     await render(from.id,chatId,null,"home"); return;
   }
-  if(text==="/menu")            {await render(from.id,chatId,null,"home");return;}
-  if(text==="/sub")             {await render(from.id,chatId,null,"sub");return;}
-  if(text==="/balance")         {await render(from.id,chatId,null,"topup");return;}
-  if(text==="/referral")        {await render(from.id,chatId,null,"ref");return;}
+  if(text==="/menu"){
+    const passed=await enforceChannelGate(from.id,chatId,getLang(from.id));
+    if(!passed) return;
+    await render(from.id,chatId,null,"home");return;
+  }
+  if(text==="/sub"){
+    const passed=await enforceChannelGate(from.id,chatId,getLang(from.id));
+    if(!passed) return;
+    await render(from.id,chatId,null,"sub");return;
+  }
+  if(text==="/balance"){
+    const passed=await enforceChannelGate(from.id,chatId,getLang(from.id));
+    if(!passed) return;
+    await render(from.id,chatId,null,"topup");return;
+  }
+  if(text==="/referral"){
+    const passed=await enforceChannelGate(from.id,chatId,getLang(from.id));
+    if(!passed) return;
+    await render(from.id,chatId,null,"ref");return;
+  }
   if(text==="/admin"&&isAdmin(from.id)){await render(from.id,chatId,user(from.id)?.last_menu_id,"a_main");return;}
 
   await tg("sendMessage",{chat_id:chatId,text:"Используйте /start"});
@@ -2266,6 +2905,31 @@ async function handleCallback(q) {
 
   if(data==="noop"){await ans();return;}
 
+  // ── Input cancel buttons ──────────────────────────────────────────────────
+  if(data.startsWith("cancel:")){
+    const ustate=getUserState(uid);
+    clearUserState(uid);
+    // Delete the prompt message itself
+    tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
+    await ans();
+    // Determine where to go back
+    const sub2=data.split(":")[1]; // topup_crypto | topup_fk | promo | gift
+    if(sub2==="topup_crypto"||sub2==="topup_fk"){
+      await render(uid,chatId,user(uid)?.last_menu_id||null,"topup");
+    } else if(sub2==="promo"){
+      // Return to buy confirm — extract code/mode/devices from cancel data
+      // format: cancel:promo:CODE:MODE:DEVICES
+      const parts=data.split(":");
+      const code=parts[2],mode=parts[3],devices=Number(parts[4]||3);
+      await askBuyConfirm(uid,chatId,user(uid)?.last_menu_id||null,code,mode,null,"",0,devices);
+    } else if(sub2==="gift"){
+      await render(uid,chatId,user(uid)?.last_menu_id||null,"gift");
+    } else {
+      await render(uid,chatId,user(uid)?.last_menu_id||null,"home");
+    }
+    return;
+  }
+
   // ── Channel gate check ────────────────────────────────────────────────────
   if(data==="gate:check"){
     const member=await checkChannelMembership(uid);
@@ -2278,6 +2942,12 @@ async function handleCallback(q) {
     await gif(chatId,"gif_main_menu");
     await render(uid,chatId,null,"home");
     await ans(); return;
+  }
+
+  // ── Channel gate: enforce for all remaining callbacks ────────────────────
+  if(!isAdmin(uid)){
+    const _gPassed=await enforceChannelGate(uid,chatId,getLang(uid));
+    if(!_gPassed){ await ans(); return; }
   }
 
   // ── Trial period ──────────────────────────────────────────────────────────
@@ -2327,9 +2997,97 @@ async function handleCallback(q) {
   if(navMap[data]){await render(uid,chatId,msgId,navMap[data]);await ans();return;}
 
   // ── Purchase ──────────────────────────────────────────────────────────────
-  if(data.startsWith("pay:n:")){await askBuyConfirm(uid,chatId,msgId,data.split(":")[2],"new",q.id);return;}
+  // pay:n: → show device selector first
+  if(data.startsWith("pay:n:")){
+    const code=data.split(":")[2];
+    await ans();
+    await showDeviceSelector(uid,chatId,msgId,code,"new",3);
+    return;
+  }
   // pay:r: (renew while active) removed from UI
-  if(data.startsWith("pay:c:")){const[,,mode,code]=data.split(":");await buySelf(uid,chatId,msgId,code,mode,q.id);return;}
+  if(data.startsWith("pay:c:")){
+    const parts=data.split(":");
+    // format: pay:c:MODE:CODE:PROMO_CD:PROMO_PCT:DEVICES
+    const mode=parts[2], code=parts[3], promoCd=parts[4]||"", promoPct=Number(parts[5]||0), devices=Number(parts[6]||3);
+    await buySelf(uid,chatId,msgId,code,mode,q.id,promoCd,promoPct,devices);
+    return;
+  }
+
+  // ── Device selector callbacks ─────────────────────────────────────────────
+  if(data.startsWith("dev:")){
+    const parts=data.split(":");
+    // dev:pay:CODE:MODE:DEVICES → go to confirm
+    if(parts[1]==="pay"){
+      const code=parts[2], mode=parts[3], devices=Number(parts[4]||3);
+      await ans();
+      await askBuyConfirm(uid,chatId,msgId,code,mode,null,"",0,devices);
+      return;
+    }
+    // dev:CODE:MODE:DEVICES → update selector (change device count)
+    const code=parts[1], mode=parts[2], devices=Number(parts[3]||3);
+    await ans();
+    await showDeviceSelector(uid,chatId,msgId,code,mode,devices);
+    return;
+  }
+
+  // ── Promo code ────────────────────────────────────────────────────────────
+  if(data.startsWith("promo:ask:")){
+    const parts=data.split(":"), code=parts[2], mode=parts[3], devices=Number(parts[4]||3);
+    await ans();
+    const promptId = await sendPrompt(chatId, T(uid).promo_enter, `cancel:promo:${code}:${mode}:${devices}`);
+    setUserState(uid,"promo_input",`${code}:${mode}:${devices}:${promptId}`);
+    return;
+  }
+
+  // ── Direct payment (pending order) ────────────────────────────────────────
+  if(data.startsWith("direct:crypto:")){
+    if(!CRYPTOBOT_TOKEN){await ans("CryptoBot не настроен.",true);return;}
+    const poId=Number(data.split(":")[2]), po=getPendingOrder(poId);
+    if(!po||po.tg_id!==uid||po.status!=="pending"){await ans(getLang(uid)==="en"?"Order expired. Please start again.":"Заказ истёк. Начните заново.",true);return;}
+    const tr=tariff(po.tariff_code); if(!tr){await ans("Тариф не найден.",true);return;}
+    const devCount=Number(po.devices||3)||3;
+    const finalPrice=calcPriceWithDevices(tr.price_rub,po.promo_pct,devCount);
+    await ans();
+    expireOldCryptoPayments(uid);
+    const inv=await createCryptoInvoice(finalPrice);
+    if(!inv){await tg("sendMessage",{chat_id:chatId,text:"❌ CryptoBot недоступен. Попробуйте позже."});return;}
+    const cpId=createCryptoPaymentRow(uid,finalPrice,inv.amountUsdt,inv.rate,inv.invoiceId,inv.payUrl);
+    const tx=T(uid);
+    const msgText=[tx.crypto_inv,"",tx.crypto_sum(rub(finalPrice),inv.amountUsdt),tx.crypto_rate(inv.rate),"",tx.crypto_steps,"",tx.crypto_ttl].join("\n");
+    await tg("sendMessage",{chat_id:chatId,text:msgText,parse_mode:"HTML",reply_markup:{inline_keyboard:[
+      [{text:tx.btn_pay_crypto,url:inv.payUrl}],
+      [{text:tx.btn_check,callback_data:`cp:check:${cpId}`}],
+      [{text:tx.btn_cancel,callback_data:`cp:cancel:${cpId}`}],
+    ]}});
+    return;
+  }
+  if(data.startsWith("direct:fk:")){
+    if(!isFkEnabled()){await ans("Способ пополнения временно недоступен.",true);return;}
+    const parts=data.split(":"), poId=Number(parts[2]), methodId=Number(parts[3]||44);
+    const po=getPendingOrder(poId);
+    if(!po||po.tg_id!==uid||po.status!=="pending"){await ans(getLang(uid)==="en"?"Order expired. Please start again.":"Заказ истёк. Начните заново.",true);return;}
+    const tr=tariff(po.tariff_code); if(!tr){await ans("Тариф не найден.",true);return;}
+    const devCount=Number(po.devices||3)||3;
+    const finalPrice=calcPriceWithDevices(tr.price_rub,po.promo_pct,devCount);
+    const serverIp=fkServerIp();
+    if(!serverIp){await ans("Внешний IP не определён.",true);return;}
+    await ans();
+    const email=`user${uid}@${FK_EMAIL_DOMAIN}`;
+    let order;
+    try { order=await createFkOrder({uid,amountRub:finalPrice,methodId,email,ip:serverIp}); }
+    catch(e){await tg("sendMessage",{chat_id:chatId,text:"❌ Не удалось создать счёт. Попробуйте позже."});return;}
+    if(!order.location){await tg("sendMessage",{chat_id:chatId,text:"❌ Не удалось получить ссылку оплаты."});return;}
+    const fkId=createFkPaymentRow(uid,finalPrice,methodId,order.paymentId,order.location,order.orderId);
+    // Link this FK payment to the pending order via payment_id comment stored in po
+    const tx=T(uid);
+    const msgText=[tx.fk_created,"",`Сумма: <b>${rub(finalPrice)}</b>`,`Метод: <b>${esc(methodTitle(methodId,getLang(uid)))}</b>`,"",tx.fk_steps,tx.fk_wait].join("\n");
+    await tg("sendMessage",{chat_id:chatId,text:msgText,parse_mode:"HTML",disable_web_page_preview:true,reply_markup:{inline_keyboard:[
+      [{text:"💳 Оплатить",url:order.location}],
+      [{text:tx.btn_check,callback_data:`fk:check:${fkId}`}],
+      [{text:tx.btn_cancel,callback_data:`fk:cancel:${fkId}`}],
+    ]}});
+    return;
+  }
 
   // ── Purchase history ──────────────────────────────────────────────────────
   if(data.startsWith("ph:")){await render(uid,chatId,msgId,"purchases",{page:Number(data.split(":")[1]||0)});await ans();return;}
@@ -2377,14 +3135,11 @@ async function handleCallback(q) {
     const code=data.split(":")[2],tr=tariff(code),u=user(uid),tx=T(uid);
     if(!tr){await ans("Тариф не найден.",true);return;}
     if(Number(u.balance_rub)<Number(tr.price_rub)){await ans(tx.gift_no_bal(tr.price_rub,u.balance_rub),true);return;}
-    // Skip user list — go straight to ID/username input
-    setUserState(uid,"gift_recipient_id",code); await ans();
-    const lang=getLang(uid), isRu=lang==="ru";
-    const promptText=isRu
-      ? `🎁 <b>${esc(tariffTitle(tr,lang))}</b>\n\n${tx.gift_enter_id}`
-      : `🎁 <b>${esc(tariffTitle(tr,lang))}</b>\n\n${tx.gift_enter_id}`;
-    await tg("sendMessage",{chat_id:chatId,text:promptText,parse_mode:"HTML",
-      reply_markup:{keyboard:[[{text:isRu?"Отмена":"Cancel"}]],resize_keyboard:true,one_time_keyboard:true}});
+    await ans();
+    const lang=getLang(uid);
+    const promptText=`🎁 <b>${esc(tariffTitle(tr,lang))}</b>\n\n${tx.gift_enter_id}`;
+    const promptId = await sendPrompt(chatId, promptText, `cancel:gift:${code}`);
+    setUserState(uid,"gift_recipient_id",`${code}:${promptId}`);
     return;
   }
   // g:l: (user list pagination) removed
@@ -2419,8 +3174,15 @@ async function handleCallback(q) {
       markCryptoPaid(cpId);
       updateBalance(uid,cp.amount_rub);
       const me=user(uid), tx=T(uid);
-      await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.crypto_ok(cp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
       tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Crypto пополнение</b>`,"",`${esc(me.first_name||String(uid))} (<code>${uid}</code>)`,`Сумма: <b>${rub(cp.amount_rub)}</b>  (${cp.amount_usdt} USDT @ ${Number(cp.rate_rub).toFixed(2)} ₽)`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
+      // Auto-complete pending order if exists
+      const po=getPendingOrderByUser(uid);
+      if(po){
+        closePendingOrder(po.id);
+        await completePurchaseAfterTopup(uid,po);
+      } else {
+        await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.crypto_ok(cp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
+      }
     }else{
       await tg("sendMessage",{
         chat_id:chatId,
@@ -2460,8 +3222,15 @@ async function handleCallback(q) {
         await tg("answerCallbackQuery",{callback_query_id:q.id,text:"❌ Сумма платежа не совпадает.",show_alert:true}).catch(()=>{});
         return;
       }
-      const me=user(uid), tx=T(uid);
-      await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.fk_ok(fp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
+      // Auto-complete pending order if exists
+      const po=getPendingOrderByUser(uid);
+      if(po){
+        closePendingOrder(po.id);
+        await completePurchaseAfterTopup(uid,po);
+      } else {
+        const me=user(uid), tx=T(uid);
+        await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.fk_ok(fp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
+      }
     }catch(e){
       await tg("answerCallbackQuery",{callback_query_id:q.id,text:`❌ ${String(e.message||"Ошибка проверки")}`.slice(0,200),show_alert:true}).catch(()=>{});
     }
@@ -2477,18 +3246,28 @@ async function handleCallback(q) {
   }
 
   // ── Admin nav ─────────────────────────────────────────────────────────────
-  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_main","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk"};
+  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_main","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk","a:promo":"a_promo"};
   if(adminNav[data]){await render(uid,chatId,msgId,adminNav[data]);await ans();return;}
+
+  // Cancel admin input — delete the prompt message and return to admin main
+  if(data==="a:cancel_admin"){
+    clearAdminState(uid);
+    await tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
+    await render(uid,chatId,user(uid)?.last_menu_id||null,"a_main");
+    await ans(); return;
+  }
+  // Dynamic admin nav with data params
+  if(data.startsWith("a:users:")){await render(uid,chatId,msgId,"a_users",{page:Number(data.split(":")[2]||0)});await ans();return;}
 
   // ── Channel / trial admin actions ─────────────────────────────────────────
   if(data==="a:chan_id"){
     setAdminState(uid,"chan_id","");
-    await tg("sendMessage",{chat_id:chatId,text:`Текущий канал: <code>${esc(setting("channel_id","") || "не задан")}</code>\n\nВведите @username или числовой ID канала (например <code>@dreinnvpn</code> или <code>-1001234567890</code>).\nДля отключения введите «-».\n/cancel — отмена.`,parse_mode:"HTML"});
+    await sendPrompt(chatId,`Текущий канал: <code>${esc(setting("channel_id","") || "не задан")}</code>\n\nВведите @username или числовой ID канала\n(например <code>@dreinnvpn</code> или <code>-1001234567890</code>).\nДля отключения введите «-».`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:chan_url"){
     setAdminState(uid,"chan_url","");
-    await tg("sendMessage",{chat_id:chatId,text:`Текущая ссылка: <code>${esc(setting("channel_invite_url","") || "не задана")}</code>\n\nВведите ссылку-приглашение (https://t.me/+...) для приватных каналов, или «-» для очистки.\n/cancel — отмена.`,parse_mode:"HTML"});
+    await sendPrompt(chatId,`Текущая ссылка: <code>${esc(setting("channel_invite_url","") || "не задана")}</code>\n\nВведите ссылку-приглашение (https://t.me/+...) или «-» для очистки.`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:trial_toggle"){
@@ -2499,22 +3278,22 @@ async function handleCallback(q) {
   }
   if(data==="a:trial_days"){
     setAdminState(uid,"trial_days","");
-    await tg("sendMessage",{chat_id:chatId,text:`Текущая длительность: <b>${trialDays()} дн.</b>\n\nВведите новое значение (1..365):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await sendPrompt(chatId,`Текущая длительность: <b>${trialDays()} дн.</b>\n\nВведите новое значение (1..365):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:fk_shop"){
     setAdminState(uid,"fk_shop_id","");
-    await tg("sendMessage",{chat_id:chatId,text:`Текущий shop_id: <code>${fkShopId() || "не задан"}</code>\n\nВведите новый shop_id (число > 0):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await sendPrompt(chatId,`Текущий shop_id: <code>${fkShopId() || "не задан"}</code>\n\nВведите новый shop_id (число > 0):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:fk_min"){
     setAdminState(uid,"fk_min_rub","");
-    await tg("sendMessage",{chat_id:chatId,text:`Текущий min amount: <code>${fkMinRub()}</code>\n\nВведите новую минимальную сумму (в рублях):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await sendPrompt(chatId,`Текущий min amount: <code>${fkMinRub()}</code>\n\nВведите новую минимальную сумму (в рублях):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:fk_path"){
     setAdminState(uid,"fk_notify_path","");
-    await tg("sendMessage",{chat_id:chatId,text:`Текущий webhook path: <code>${esc(fkNotifyPath())}</code>\n\nВведите новый путь (например /freekassa/notify):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await sendPrompt(chatId,`Текущий webhook path: <code>${esc(fkNotifyPath())}</code>\n\nВведите новый путь (например /freekassa/notify):`,"a:cancel_admin");
     await ans(); return;
   }
 
@@ -2522,12 +3301,17 @@ async function handleCallback(q) {
   if(data.startsWith("a:te:")){
     const code=data.split(":")[2],tr=tariff(code);
     setAdminState(uid,"tariff_price",code);
-    await tg("sendMessage",{chat_id:chatId,text:`«${esc(tr?.title||code)}» — ${rub(tr?.price_rub||0)}\n\nВведите новую цену (₽):\n/cancel — отмена.`});
+    await sendPrompt(chatId,`«${esc(tr?.title||code)}» — ${rub(tr?.price_rub||0)}\n\nВведите новую цену (₽):`,"a:cancel_admin");
+    await ans(); return;
+  }
+  if(data==="a:dev_price"){
+    setAdminState(uid,"dev_extra_price","");
+    await sendPrompt(chatId,`Текущая цена за доп. устройство (от 4+): <b>${rub(devicesExtraPrice())}</b>\n\nВведите новую цену в рублях (0 = бесплатно):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data.startsWith("a:ge:")){
     setAdminState(uid,"gif",data.split(":")[2]);
-    await tg("sendMessage",{chat_id:chatId,text:"Отправьте GIF или file_id.\n/cancel — отмена."});
+    await sendPrompt(chatId,"Отправьте GIF или file_id."         ,"a:cancel_admin");
     await ans(); return;
   }
   // Section image set
@@ -2535,10 +3319,10 @@ async function handleCallback(q) {
     const viewKey=data.split(":")[2];
     const hasImg=!!viewImg(viewKey);
     setAdminState(uid,"section_img",viewKey);
-    const kb={inline_keyboard:[]};
-    if(hasImg) kb.inline_keyboard.push([{text:"🗑 Удалить изображение",callback_data:`a:img_del:${viewKey}`}]);
-    kb.inline_keyboard.push([{text:"« Назад",callback_data:"a:imgs"}]);
-    await tg("sendMessage",{chat_id:chatId,text:`Изображение для раздела «<b>${viewKey}</b>».\n\nОтправьте фото или file_id.\n/cancel — отмена.`,parse_mode:"HTML",reply_markup:kb});
+    const rows=[];
+    if(hasImg) rows.push([{text:"🗑 Удалить изображение",callback_data:`a:img_del:${viewKey}`}]);
+    rows.push([{text:"« Отмена",callback_data:"a:cancel_admin"}]);
+    await tg("sendMessage",{chat_id:chatId,text:`Изображение для раздела «<b>${viewKey}</b>».\n\nОтправьте фото или file_id.`,parse_mode:"HTML",reply_markup:{inline_keyboard:rows}});
     await ans(); return;
   }
   if(data.startsWith("a:img_del:")){
@@ -2551,12 +3335,12 @@ async function handleCallback(q) {
   if(data.startsWith("a:lnk:")){
     const key=data.split(":").slice(2).join(":");
     setAdminState(uid,"edit_link",key);
-    await tg("sendMessage",{chat_id:chatId,text:`Ссылка «<b>${key.replace("url_","")}</b>»:\n<code>${esc(setting(key))}</code>\n\nВведите новый URL (или «-» для очистки):\n/cancel — отмена.`,parse_mode:"HTML"});
+    await sendPrompt(chatId,`Ссылка «<b>${key.replace("url_","")}</b>»:\n<code>${esc(setting(key))}</code>\n\nВведите новый URL (или «-» для очистки):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:bs"){
     setAdminState(uid,"broadcast","");
-    await tg("sendMessage",{chat_id:chatId,text:"📨 Отправьте сообщение для рассылки.\n\nПоддерживается: текст (с форматированием Telegram), фото, видео, GIF, документ, голосовое.\n\n/cancel — отмена."});
+    await sendPrompt(chatId,"📨 Отправьте сообщение для рассылки.\n\nПоддерживается: текст (с форматированием Telegram), фото, видео, GIF, документ, голосовое.","a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:bs_confirm"){
@@ -2586,21 +3370,54 @@ async function handleCallback(q) {
     await ans("Отменено.");
     await render(uid,chatId,msgId,"a_bcast"); return;
   }
-  if(data==="a:guide_ru"){setAdminState(uid,"guide_text","");await tg("sendMessage",{chat_id:chatId,text:"🇷🇺 Отправьте текст инструкции на русском.\nФормат ссылок: [Название|URL]\n/cancel — отмена."});await ans();return;}
-  if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await tg("sendMessage",{chat_id:chatId,text:"🇬🇧 Send the guide text in English.\nLink format: [Label|URL]\n/cancel — cancel."});await ans();return;}
+  if(data==="a:guide_ru"){setAdminState(uid,"guide_text","");await sendPrompt(chatId,"🇷🇺 Отправьте текст инструкции на русском.\nФормат ссылок: [Название|URL]","a:cancel_admin");await ans();return;}
+  if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await sendPrompt(chatId,"🇬🇧 Send the guide text in English.\nLink format: [Label|URL]","a:cancel_admin");await ans();return;}
   if(data==="a:pe"){await ans("Раздел удален.",true);await render(uid,chatId,msgId,"a_main");return;}
-  if(data==="a:rp"){setAdminState(uid,"ref_percent","");await tg("sendMessage",{chat_id:chatId,text:`Ставка: ${setting("ref_percent","30")}%\n\nВведите новую (0..100):\n/cancel — отмена.`});await ans();return;}
+  if(data==="a:rp"){setAdminState(uid,"ref_percent","");await sendPrompt(chatId,`Ставка: ${setting("ref_percent","30")}%\n\nВведите новую (0..100):`,"a:cancel_admin");await ans();return;}
 
-  if(data==="a:find"){setAdminState(uid,"find_user","");await tg("sendMessage",{chat_id:chatId,text:"Введите Telegram ID или @username:\n/cancel — отмена."});await ans();return;}
+  if(data==="a:find"){setAdminState(uid,"find_user","");await sendPrompt(chatId,"Введите Telegram ID или @username:","a:cancel_admin");await ans();return;}
   // DB
   if(data==="a:db_export"){await ans("Формирую файл...");await exportDbToAdmin(chatId);return;}
   if(data==="a:db_import_start"){setAdminState(uid,"db_import_wait","");await ans("Жду файл .db/.sqlite");await tg("sendMessage",{chat_id:chatId,text:"📤 Отправьте SQLite файл документом.\n⚠️ Бот перезапустится после импорта."});return;}
   // Withdrawal callbacks removed
   // Balance add
+  // ── Admin user info: grant sub ────────────────────────────────────────────
+  if(data.startsWith("a:user_back:")){
+    const targetId=Number(data.split(":")[2]);
+    await render(uid,chatId,msgId,"a_user_info",{id:targetId}); await ans(); return;
+  }
+  if(data.startsWith("a:grant:")){
+    const targetId=Number(data.split(":")[2]);
+    await render(uid,chatId,msgId,"a_grant",{id:targetId}); await ans(); return;
+  }
+  if(data.startsWith("a:grant_ok:")){
+    const parts=data.split(":"), targetId=Number(parts[2]), tariffCode=parts[3];
+    await ans("⏳ Выдаю подписку...");
+    try {
+      const res = await adminGrantSub(uid, targetId, tariffCode, chatId, msgId);
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Подписка «${esc(res.plan)}» выдана ${esc(res.name)}`,parse_mode:"HTML"});
+    } catch(e) {
+      await tg("sendMessage",{chat_id:chatId,text:`❌ Ошибка: ${e.message}`});
+    }
+    await render(uid,chatId,user(uid)?.last_menu_id||null,"a_user_info",{id:Number(data.split(":")[2])}); return;
+  }
+
+  // ── Admin promo management ────────────────────────────────────────────────
+  if(data==="a:promo_add"){
+    setAdminState(uid,"promo_add","");
+    await sendPrompt(chatId,"Введите промокод в формате:\n<code>КОД СКИДКА% [МАКС_ИСПОЛЬЗОВАНИЙ]</code>\n\nПример: <code>SALE10 10 100</code>\n(0 = без ограничений)","a:cancel_admin");
+    await ans(); return;
+  }
+  if(data==="a:promo_del"){
+    setAdminState(uid,"promo_deactivate","");
+    await sendPrompt(chatId,"Введите код промокода для деактивации:","a:cancel_admin");
+    await ans(); return;
+  }
+
   if(data.startsWith("a:bal_add:")){
     const targetId=data.split(":")[2], tu=user(Number(targetId));
     setAdminState(uid,"bal_add",targetId); await ans();
-    await tg("sendMessage",{chat_id:chatId,text:`Пополнение для ${esc(tu?.first_name||targetId)}\nБаланс: ${rub(tu?.balance_rub)}\n\nВведите сумму (отрицательная = списание):\n/cancel — отмена.`}); return;
+    await sendPrompt(chatId,`Пополнение для ${esc(tu?.first_name||targetId)}\nБаланс: ${rub(tu?.balance_rub)}\n\nВведите сумму (отрицательная = списание):`,"a:cancel_admin"); return;
   }
   // Sub revoke: deactivate subscription immediately
   if(data.startsWith("a:sub_revoke:")){
@@ -2653,6 +3470,50 @@ function startWebhookServer() {
         res.end(JSON.stringify({ ok: true, service: "bot", freeKassa: isFkEnabled(), ts: Date.now() }));
         return;
       }
+
+      // ── Read body (with size limit) ───────────────────────────────────────
+      const chunks = [];
+      let size = 0;
+      let bodyDestroyed = false;
+      await new Promise((resolve, reject) => {
+        req.on("data", (chunk) => {
+          size += chunk.length;
+          if (size > 1024 * 1024) {
+            bodyDestroyed = true;
+            req.destroy();
+            resolve();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on("end", resolve);
+        req.on("error", resolve);
+        req.on("close", resolve);
+      });
+      if (bodyDestroyed) {
+        res.writeHead(413, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Payload too large");
+        return;
+      }
+      const raw = Buffer.concat(chunks).toString("utf8");
+
+      // ── CryptoBot webhook ─────────────────────────────────────────────────
+      if (req.method === "POST" && url.pathname === CRYPTOBOT_WEBHOOK_PATH) {
+        const headerToken = req.headers["crypto-pay-api-token"] || "";
+        if (!CRYPTOBOT_TOKEN || !verifyCryptoBotWebhook(raw, headerToken)) {
+          res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Forbidden");
+          return;
+        }
+        let body = {};
+        try { body = JSON.parse(raw); } catch {}
+        handleCryptoBotWebhookPayload(body).catch(e => console.error("[CryptoBot webhook]", e.message));
+        res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("OK");
+        return;
+      }
+
+      // ── FreeKassa webhook ─────────────────────────────────────────────────
       if (req.method !== "POST" || url.pathname !== fkNotifyPath()) {
         res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("Not found");
@@ -2667,15 +3528,6 @@ function startWebhookServer() {
         return;
       }
 
-      const chunks = [];
-      let size = 0;
-      req.on("data", (chunk) => {
-        size += chunk.length;
-        if (size > 1024 * 1024) req.destroy();
-        else chunks.push(chunk);
-      });
-      await new Promise((resolve) => req.on("end", resolve));
-      const raw = Buffer.concat(chunks).toString("utf8");
       const payload = parseBodyByContentType(raw, req.headers["content-type"]);
 
       if (!validateFkWebhookSign(payload)) {
@@ -2702,6 +3554,19 @@ function startWebhookServer() {
         res.end("Order not accepted");
         return;
       }
+
+      // If FK payment was linked to a pending order, auto-complete it
+      if (credited.ok) {
+        const fp = credited.fp;
+        if (fp) {
+          const po = getPendingOrderByUser(fp.tg_id);
+          if (po) {
+            closePendingOrder(po.id);
+            completePurchaseAfterTopup(fp.tg_id, po).catch(()=>{});
+          }
+        }
+      }
+
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
       res.end("YES");
     } catch (e) {
@@ -2713,15 +3578,32 @@ function startWebhookServer() {
 
   server.listen(FK_PORT, "0.0.0.0", () => {
     const notifyUrl = `https://${FK_DOMAIN}:${FK_PORT}${fkNotifyPath()}`;
+    const cryptoUrl = `https://${FK_DOMAIN}:${FK_PORT}${CRYPTOBOT_WEBHOOK_PATH}`;
     console.log(`[Webhook] HTTP server listening on :${FK_PORT}`);
-    console.log(`[Webhook] Configure FreeKassa notify URL: ${notifyUrl}`);
+    console.log(`[Webhook] FreeKassa notify URL: ${notifyUrl}`);
+    if (CRYPTOBOT_TOKEN) console.log(`[Webhook] CryptoBot webhook URL: ${cryptoUrl}`);
   });
+}
+
+async function setMyCommands() {
+  const commands = [
+    { command: "start", description: "Перезапустить бота" },
+    { command: "sub",   description: "Моя подписка" },
+  ];
+  try {
+    await tg("setMyCommands", { commands });
+    console.log("[Bot] Commands registered:", commands.map(c=>"/"+c.command).join(", "));
+  } catch(e) {
+    console.warn("[Bot] setMyCommands failed:", e.message);
+  }
 }
 
 async function boot() {
   init();
+  await setMyCommands();
   await ensureFkServerIp();
   startWebhookServer();
+  startExpiryNotificationJob();
   poll();
 }
 
