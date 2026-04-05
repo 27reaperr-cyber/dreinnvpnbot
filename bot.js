@@ -6,6 +6,7 @@ const http      = require("http");
 const fsp       = fs.promises;
 const { spawn } = require("child_process");
 const Database  = require("better-sqlite3");
+const QRCode    = require("qrcode");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -1877,6 +1878,8 @@ function homeKb(uid) {
      {text:tx.btn_other_gift,callback_data:"v:gift"}],
     [{text:tx.btn_ref,callback_data:"v:ref"},
      {text:tx.btn_about,callback_data:"v:about"}],
+    [{text:tx.btn_profile,callback_data:"v:profile"},
+     {text:tx.btn_other_topup,callback_data:"v:topup"}],
   ];
   if(lnk.support()) rows.push([{text:tx.btn_support,url:lnk.support()},{text:tx.btn_guide,callback_data:"v:guide"}]);
   else rows.push([{text:tx.btn_guide,callback_data:"v:guide"}]);
@@ -1898,10 +1901,11 @@ function subKb(uid) {
   const tx=T(uid), s=sub(uid), rows=[];
   if(activeSub(s)){
     rows.push([{text:tx.btn_guide,callback_data:"v:guide"},{text:tx.btn_connect,url:s.sub_url}]);
+    rows.push([{text:tx.btn_qr,callback_data:"sub:qr"},{text:tx.btn_renew,callback_data:`pay:n:${s.plan_code}`}]);
   } else {
     rows.push([{text:tx.btn_buy_sub,callback_data:"v:buy"}]);
   }
-  rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
+  rows.push([{text:tx.btn_other_topup,callback_data:"v:topup"},{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
 
@@ -2004,6 +2008,8 @@ function homeText(u) {
     isRu?"⚡ Стабильный мобильный интернет":"⚡ Stable mobile internet",
     isRu?"⚡ Скорость до 1 ГБ/с":"⚡ Speed up to 1GB/s",
     isRu?"💎 Без логов и регистрации":"💎 No logs",
+    "",
+    tx.home_info(u.tg_id, u.balance_rub),
   ];
   if(hasSub){const dd=Math.floor(Math.max(0,s.expires_at-now())/86400000);lines.push("",tx.home_sub_ok(dd));}
   return lines.join("\n");
@@ -2057,6 +2063,7 @@ function tariffTitle(t, lang) {
 function buyText(uid) {
   const tx=T(uid), u=user(uid), s=sub(uid), act=activeSub(s), trial=isTrialSub(uid), isRu=getLang(uid)==="ru";
   const lines=[
+    tx.buy_balance(u.balance_rub),
     isRu?"Выберите тариф и способ оплаты.":"Choose a plan and payment method.",
   ];
   if(trial)     lines.push("",tx.buy_trial_active);
@@ -3210,12 +3217,8 @@ async function handleCallback(q) {
     await ans();
     const tx=T(uid);
     try {
-      const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=16&data=${encodeURIComponent(s.sub_url)}`;
-      // Fetch the QR image on the bot server — avoids Telegram trying to pull it
-      // from a remote URL, which fails when sub_url is long or qrserver is slow.
-      const qrRes = await fetch(qrUrl, { signal: AbortSignal.timeout(12000) });
-      if (!qrRes.ok) throw new Error(`QR server HTTP ${qrRes.status}`);
-      const buf = Buffer.from(await qrRes.arrayBuffer());
+      // Generate QR locally — no external service, works with any URL length
+      const buf = await QRCode.toBuffer(s.sub_url, { width: 512, margin: 2, errorCorrectionLevel: "M" });
       await sendPhotoBuffer(chatId, buf, "image/png", tx.sub_qr_caption, null);
     } catch(e) {
       console.error("[QR]", e.message);
