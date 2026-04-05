@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 const path      = require("path");
 const crypto    = require("crypto");
 const fs        = require("fs");
@@ -8,23 +8,9 @@ const { spawn } = require("child_process");
 const Database  = require("better-sqlite3");
 const QRCode    = require("qrcode");
 
-// Guarantee fetch/FormData/Blob in all supported Node versions (16+)
-(() => {
-  const needFetch = typeof fetch !== "function";
-  const needFormData = typeof FormData === "undefined";
-  const needBlob = typeof Blob === "undefined";
-  if (needFetch || needFormData || needBlob) {
-    const undici = require("undici");
-    if (needFetch)     global.fetch    = undici.fetch;
-    if (needFormData)  global.FormData = undici.FormData;
-    if (needBlob)      global.Blob     = undici.Blob;
-    if (!global.File && undici.File)   global.File = undici.File;
-  }
-})();
-
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Config
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 const TOKEN            = process.env.TELEGRAM_BOT_TOKEN    || "";
 const API              = (process.env.VPN_API_BASE_URL     || "").replace(/\/+$/, "");
 const APP_SECRET       = process.env.APP_SECRET            || "";
@@ -62,7 +48,7 @@ const FK_ALLOWED_IPS   = new Set([
 ]);
 
 if (!TOKEN || !API || !APP_SECRET || !ADMIN_ID) {
-  console.error("РћС‚СЃСѓС‚СЃС‚РІСѓСЋС‚ РѕР±СЏР·Р°С‚РµР»СЊРЅС‹Рµ env: TELEGRAM_BOT_TOKEN, VPN_API_BASE_URL, APP_SECRET, ADMIN_TELEGRAM_ID");
+  console.error("Отсутствуют обязательные env: TELEGRAM_BOT_TOKEN, VPN_API_BASE_URL, APP_SECRET, ADMIN_TELEGRAM_ID");
   process.exit(1);
 }
 if (!FK_API_KEY || !FK_SECRET2) console.warn("[FreeKassa] API key/secret2 missing. FreeKassa is disabled.");
@@ -76,8 +62,8 @@ const db      = new Database(DB_FILE);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// в”Ђв”Ђ Rate limiting (prevent spam clicks) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-const _cbCooldown = new Map(); // uid в†’ last callback ts
+// ── Rate limiting (prevent spam clicks) ──────────────────────────────────────
+const _cbCooldown = new Map(); // uid → last callback ts
 function checkCbRateLimit(uid) {
   const now_ = Date.now(), last = _cbCooldown.get(uid)||0;
   if (now_ - last < 400) return false; // 400ms between callbacks per user
@@ -90,7 +76,7 @@ function checkCbRateLimit(uid) {
   return true;
 }
 
-// в”Ђв”Ђ Process crash protection в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Process crash protection ──────────────────────────────────────────────────
 process.on("uncaughtException",  e => console.error("[uncaughtException]",  e));
 process.on("unhandledRejection", e => console.error("[unhandledRejection]", e));
 
@@ -101,291 +87,291 @@ process.on("warning", (w) => {
   console.warn("[warning]", w.name, w.message);
 });
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-// i18n вЂ” Translations
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
+// i18n — Translations
+// ─────────────────────────────────────────────────────────────────────────────
 const I18N = {
   ru: {
-    // Buttons вЂ” navigation
-    btn_back:       "В« РќР°Р·Р°Рґ",
-    btn_home:       "В« Р“Р»Р°РІРЅРѕРµ РјРµРЅСЋ",
-    btn_profile:    "рџ‘¤ РџСЂРѕС„РёР»СЊ",
-    btn_buy:        "рџ’і РљСѓРїРёС‚СЊ VPN",
-    btn_ref:        "рџ¤ќ Р РµС„РµСЂР°Р»С‹",
-    btn_about:      "в„№пёЏ Рћ РЅР°СЃ",
-    btn_lang:       "рџЊђ РЇР·С‹Рє",
-    btn_guide:      "рџ“‹ РРЅСЃС‚СЂСѓРєС†РёРё",
-    btn_sub:        "в­ђ РњРѕСЏ РїРѕРґРїРёСЃРєР°",
-    btn_sub_active: "в­ђ РћС‚РєСЂС‹С‚СЊ РїРѕРґРїРёСЃРєСѓ",
-    btn_hist:       "рџ—‚ РСЃС‚РѕСЂРёСЏ",
-    btn_other:      "вљ™пёЏ РћСЃС‚Р°Р»СЊРЅРѕРµ",
-    btn_other_topup:"рџ’° РџРѕРїРѕР»РЅРµРЅРёРµ",
-    btn_other_gift: "рџЋЃ РџРѕРґР°СЂРёС‚СЊ РїРѕРґРїРёСЃРєСѓ",
-    btn_back_profile:"В« РќР°Р·Р°Рґ РІ РїСЂРѕС„РёР»СЊ",
-    btn_topup:      "рџ’° РЎРїРѕСЃРѕР±С‹ РїРѕРїРѕР»РЅРµРЅРёСЏ",
-    btn_buy_sub:    "рџ’і РљСѓРїРёС‚СЊ РїРѕРґРїРёСЃРєСѓ",
-    btn_gift_send:  "рџЋЃ РџРѕРґР°СЂРёС‚СЊ",
-    btn_invite:     "рџ“Ё РџСЂРёРіР»Р°СЃРёС‚СЊ РґСЂСѓРіР°",
+    // Buttons — navigation
+    btn_back:       "« Назад",
+    btn_home:       "« Главное меню",
+    btn_profile:    "👤 Профиль",
+    btn_buy:        "💳 Купить VPN",
+    btn_ref:        "🤝 Рефералы",
+    btn_about:      "ℹ️ О нас",
+    btn_lang:       "🌐 Язык",
+    btn_guide:      "📋 Инструкции",
+    btn_sub:        "⭐ Моя подписка",
+    btn_sub_active: "⭐ Открыть подписку",
+    btn_hist:       "🗂 История",
+    btn_other:      "⚙️ Остальное",
+    btn_other_topup:"💰 Пополнение",
+    btn_other_gift: "🎁 Подарить подписку",
+    btn_back_profile:"« Назад в профиль",
+    btn_topup:      "💰 Способы пополнения",
+    btn_buy_sub:    "💳 Купить подписку",
+    btn_gift_send:  "🎁 Подарить",
+    btn_invite:     "📨 Пригласить друга",
 
-    btn_qr:         "рџ“· QR-РєРѕРґ РїРѕРґРїРёСЃРєРё",
-    btn_ref_code:   "рџ”„ РЎРјРµРЅРёС‚СЊ РєРѕРґ СЂРµС„РµСЂР°Р»Р°",
-    ref_code_confirm: "вљ пёЏ <b>РЎРјРµРЅРёС‚СЊ СЂРµС„РµСЂР°Р»СЊРЅС‹Р№ РєРѕРґ?</b>\n\n<i>Р’СЃРµ СЃС‚Р°СЂС‹Рµ СЃСЃС‹Р»РєРё РїРµСЂРµСЃС‚Р°РЅСѓС‚ СЂР°Р±РѕС‚Р°С‚СЊ.</i>",
-    sub_qr_caption: "рџ“· <b>QR-РєРѕРґ РїРѕРґРїРёСЃРєРё</b>\n\n<i>РћС‚СЃРєР°РЅРёСЂСѓР№С‚Рµ РєР°РјРµСЂРѕР№ РёР»Рё РїСЂРёР»РѕР¶РµРЅРёРµРј РґР»СЏ РїРѕРґРєР»СЋС‡РµРЅРёСЏ.</i>",
-    btn_ref_hist:   "рџ“‹ РСЃС‚РѕСЂРёСЏ РЅР°С‡РёСЃР»РµРЅРёР№",
-    btn_support:    "рџ’¬ РџРѕРґРґРµСЂР¶РєР°",
-    btn_privacy:    "рџ”’ РџРѕР»РёС‚РёРєР° РєРѕРЅС„РёРґРµРЅС†РёР°Р»СЊРЅРѕСЃС‚Рё",
-    btn_terms:      "рџ“„ РџРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРѕРµ СЃРѕРіР»Р°С€РµРЅРёРµ",
-    btn_status:     "рџ“Љ РЎС‚Р°С‚СѓСЃ СЃРµСЂРІРµСЂРѕРІ",
-    btn_proxy:      "рџ†“ Р‘РµСЃРїР»Р°С‚РЅС‹Рµ РїСЂРѕРєСЃРё",
-    btn_copy_link:  "рџ“‹ РЎРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ",
-    btn_connect:    "рџ“І РџРѕРґРєР»СЋС‡РёС‚СЊ СѓСЃС‚СЂРѕР№СЃС‚РІРѕ",
-    btn_renew:      "рџ”„ РџСЂРѕРґР»РёС‚СЊ",
-    btn_gift_tab:   "рџЋЃ РџРѕРґР°СЂРёС‚СЊ РїРѕРґРїРёСЃРєСѓ",
-    btn_confirm:    "вњ… РџРѕРґС‚РІРµСЂРґРёС‚СЊ",
-    btn_cancel:     "вќЊ РћС‚РјРµРЅР°",
-    btn_check:      "вњ… РџСЂРѕРІРµСЂРёС‚СЊ РѕРїР»Р°С‚Сѓ",
-    btn_pay_crypto: "рџ’Ћ Crypto Bot (USDT)",
-    btn_pay_other:  "рџ’і Р”СЂСѓРіРёРµ СЃРїРѕСЃРѕР±С‹ РѕРїР»Р°С‚С‹",
-    btn_pay_qr:     "рџ“· РЎР‘Рџ (QR)",
-    btn_pay_card:   "рџ’і Р‘Р°РЅРєРѕРІСЃРєР°СЏ РєР°СЂС‚Р° Р Р¤",
-    btn_pay_sber:   "рџџў SberPay",
+    btn_qr:         "📷 QR-код подписки",
+    btn_ref_code:   "🔄 Сменить код реферала",
+    ref_code_confirm: "⚠️ <b>Сменить реферальный код?</b>\n\n<i>Все старые ссылки перестанут работать.</i>",
+    sub_qr_caption: "📷 <b>QR-код подписки</b>\n\n<i>Отсканируйте камерой или приложением для подключения.</i>",
+    btn_ref_hist:   "📋 История начислений",
+    btn_support:    "💬 Поддержка",
+    btn_privacy:    "🔒 Политика конфиденциальности",
+    btn_terms:      "📄 Пользовательское соглашение",
+    btn_status:     "📊 Статус серверов",
+    btn_proxy:      "🆓 Бесплатные прокси",
+    btn_copy_link:  "📋 Скопировать ссылку",
+    btn_connect:    "📲 Подключить устройство",
+    btn_renew:      "🔄 Продлить",
+    btn_gift_tab:   "🎁 Подарить подписку",
+    btn_confirm:    "✅ Подтвердить",
+    btn_cancel:     "❌ Отмена",
+    btn_check:      "✅ Проверить оплату",
+    btn_pay_crypto: "💎 Crypto Bot (USDT)",
+    btn_pay_other:  "💳 Другие способы оплаты",
+    btn_pay_qr:     "📷 СБП (QR)",
+    btn_pay_card:   "💳 Банковская карта РФ",
+    btn_pay_sber:   "🟢 SberPay",
     // Channel gate
-    btn_check_sub:  "вњ… РЇ РїРѕРґРїРёСЃР°Р»СЃСЏ",
-    btn_open_channel:"рџ“ў РћС‚РєСЂС‹С‚СЊ РєР°РЅР°Р»",
-    gate_text:      (url) => `<b>Р”Р»СЏ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ Р±РѕС‚Р° РЅРµРѕР±С…РѕРґРёРјРѕ РїРѕРґРїРёСЃР°С‚СЊСЃСЏ РЅР° РЅР°С€ РєР°РЅР°Р».</b>\n\n<a href="${url}">рџ‘‰ РџРµСЂРµР№С‚Рё РІ РєР°РЅР°Р»</a>`,
-    gate_not_subscribed: "вќЊ Р’С‹ РµС‰С‘ РЅРµ РїРѕРґРїРёСЃР°Р»РёСЃСЊ РЅР° РєР°РЅР°Р». РџРѕРґРїРёС€РёС‚РµСЃСЊ Рё РЅР°Р¶РјРёС‚Рµ В«РЇ РїРѕРґРїРёСЃР°Р»СЃСЏВ».",
+    btn_check_sub:  "✅ Я подписался",
+    btn_open_channel:"📢 Открыть канал",
+    gate_text:      (url) => `<b>Для использования бота необходимо подписаться на наш канал.</b>\n\n<a href="${url}">👉 Перейти в канал</a>`,
+    gate_not_subscribed: "❌ Вы ещё не подписались на канал. Подпишитесь и нажмите «Я подписался».",
     // Trial
-    btn_trial:      "рџЋЃ РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ (7 РґРЅРµР№)",
-    trial_confirm:  (days) => `<b>РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ вЂ” ${days} РґРЅРµР№</b>\n\n<i>Р‘РµСЃРїР»Р°С‚РЅРѕ, РѕРґРёРЅ СЂР°Р·. РџРѕСЃР»Рµ РёСЃС‚РµС‡РµРЅРёСЏ РјРѕР¶РЅРѕ РєСѓРїРёС‚СЊ Р»СЋР±РѕР№ С‚Р°СЂРёС„.</i>\n\nРђРєС‚РёРІРёСЂРѕРІР°С‚СЊ?`,
-    trial_activated:(days) => `<b>вњ… РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ Р°РєС‚РёРІРёСЂРѕРІР°РЅ!</b>\n\n<i>Р”РѕСЃС‚СѓРї РѕС‚РєСЂС‹С‚ РЅР° ${days} РґРЅРµР№.</i>`,
-    trial_used_msg: "РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ СѓР¶Рµ РёСЃРїРѕР»СЊР·РѕРІР°РЅ.",
-    trial_has_sub:  "РЈ РІР°СЃ СѓР¶Рµ РµСЃС‚СЊ Р°РєС‚РёРІРЅР°СЏ РїРѕРґРїРёСЃРєР°.",
-    channel_gate:   "рџ‘‹ Р§С‚РѕР±С‹ РїРѕР»СЊР·РѕРІР°С‚СЊСЃСЏ Р±РѕС‚РѕРј, РїРѕРґРїРёС€РёС‚РµСЃСЊ РЅР° РЅР°С€ РєР°РЅР°Р».",
+    btn_trial:      "🎁 Пробный период (7 дней)",
+    trial_confirm:  (days) => `<b>Пробный период — ${days} дней</b>\n\n<i>Бесплатно, один раз. После истечения можно купить любой тариф.</i>\n\nАктивировать?`,
+    trial_activated:(days) => `<b>✅ Пробный период активирован!</b>\n\n<i>Доступ открыт на ${days} дней.</i>`,
+    trial_used_msg: "Пробный период уже использован.",
+    trial_has_sub:  "У вас уже есть активная подписка.",
+    channel_gate:   "👋 Чтобы пользоваться ботом, подпишитесь на наш канал.",
     // Language
-    lang_title:  "рџЊђ <b>Р’С‹Р±РѕСЂ СЏР·С‹РєР°</b>",
-    lang_current:"РўРµРєСѓС‰РёР№ СЏР·С‹Рє",
-    lang_ru:     "рџ‡·рџ‡є Р СѓСЃСЃРєРёР№",
-    lang_en:     "рџ‡¬рџ‡§ English",
+    lang_title:  "🌐 <b>Выбор языка</b>",
+    lang_current:"Текущий язык",
+    lang_ru:     "🇷🇺 Русский",
+    lang_en:     "🇬🇧 English",
     // Home
-    home_title:  (name) => `рџђё РџСЂРёРІРµС‚, ${esc(name||"")}`,
-    home_info:   (id, bal) => `<blockquote>вЂ” Р’Р°С€ ID: <code>${id}</code>\nвЂ” Р’Р°С€ Р±Р°Р»Р°РЅСЃ: <b>${rub(bal)}</b></blockquote>`,
-    home_footer: `РљР°РЅР°Р» вЂ” @DreinnVPN\nРџРѕРґРґРµСЂР¶РєР° вЂ” @DreinnVPNSupportBot`,
-    home_balance:(bal) => `<blockquote>Р‘Р°Р»Р°РЅСЃ: <b>${rub(bal)}</b></blockquote>`,
-    home_sub_ok: (days) => `<i>РџРѕРґРїРёСЃРєР° Р°РєС‚РёРІРЅР° вЂ” РѕСЃС‚Р°Р»РѕСЃСЊ ${days} РґРЅ.</i>`,
+    home_title:  (name) => `🐸 Привет, ${esc(name||"")}`,
+    home_info:   (id, bal) => `<blockquote>— Ваш ID: <code>${id}</code>\n— Ваш баланс: <b>${rub(bal)}</b></blockquote>`,
+    home_footer: `Канал — @DreinnVPN\nПоддержка — @DreinnVPNSupportBot`,
+    home_balance:(bal) => `<blockquote>Баланс: <b>${rub(bal)}</b></blockquote>`,
+    home_sub_ok: (days) => `<i>Подписка активна — осталось ${days} дн.</i>`,
     // Profile
-    prof_title:  "<b>РџСЂРѕС„РёР»СЊ</b>",
-    prof_bal:    (v) => `Р‘Р°Р»Р°РЅСЃ: <b>${rub(v)}</b>`,
-    prof_refs:   (v) => `Р РµС„РµСЂР°Р»РѕРІ: <b>${v}</b>`,
+    prof_title:  "<b>Профиль</b>",
+    prof_bal:    (v) => `Баланс: <b>${rub(v)}</b>`,
+    prof_refs:   (v) => `Рефералов: <b>${v}</b>`,
     prof_id:     (v) => `ID: <code>${v}</code>`,
     // Subscription
-    sub_title:   "<b>РњРѕСЏ РїРѕРґРїРёСЃРєР°</b>",
-    sub_none:    "РђРєС‚РёРІРЅР°СЏ РїРѕРґРїРёСЃРєР° РЅРµ РЅР°Р№РґРµРЅР°.\n\n<i>РћС„РѕСЂРјРёС‚Рµ С‚Р°СЂРёС„ РІ СЂР°Р·РґРµР»Рµ В«РљСѓРїРёС‚СЊ VPNВ».</i>",
-    sub_plan:    (v) => `РўР°СЂРёС„: <b>${esc(v)}</b>`,
-    sub_exp:     (v) => `РСЃС‚РµРєР°РµС‚: <b>${v}</b>`,
-    sub_left:    (d,h,m) => `РћСЃС‚Р°Р»РѕСЃСЊ: <b>${d} РґРЅ. ${h} С‡. ${m} РјРёРЅ.</b>`,
-    sub_devices: "Р”Рѕ 3 СѓСЃС‚СЂРѕР№СЃС‚РІ",
-    sub_link_hdr:"РЎСЃС‹Р»РєР° РїРѕРґРїРёСЃРєРё:",
+    sub_title:   "<b>Моя подписка</b>",
+    sub_none:    "Активная подписка не найдена.\n\n<i>Оформите тариф в разделе «Купить VPN».</i>",
+    sub_plan:    (v) => `Тариф: <b>${esc(v)}</b>`,
+    sub_exp:     (v) => `Истекает: <b>${v}</b>`,
+    sub_left:    (d,h,m) => `Осталось: <b>${d} дн. ${h} ч. ${m} мин.</b>`,
+    sub_devices: "До 3 устройств",
+    sub_link_hdr:"Ссылка подписки:",
     // Buy
-    buy_title:   "<b>РўР°СЂРёС„С‹ VPN</b>",
-    buy_balance: (v) => `<blockquote>Р’Р°С€ Р±Р°Р»Р°РЅСЃ: <b>${rub(v)}</b></blockquote>`,
-    buy_active:  "<i>вљ пёЏ РџРѕРґРїРёСЃРєР° СѓР¶Рµ Р°РєС‚РёРІРЅР°. РљСѓРїРёС‚СЊ РЅРѕРІСѓСЋ РјРѕР¶РЅРѕ РїРѕСЃР»Рµ РёСЃС‚РµС‡РµРЅРёСЏ.</i>",
-    buy_trial_active: "<i>вњ… РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ Р°РєС‚РёРІРµРЅ. РљСѓРїРёС‚СЊ С‚Р°СЂРёС„ РјРѕР¶РЅРѕ РїСЂСЏРјРѕ СЃРµР№С‡Р°СЃ вЂ” РїСЂРѕР±РЅС‹Р№ Р±СѓРґРµС‚ Р·Р°РјРµРЅС‘РЅ.</i>",
-    buy_new:     "<i>Р’С‹Р±РµСЂРёС‚Рµ С‚Р°СЂРёС„ РґР»СЏ РѕС„РѕСЂРјР»РµРЅРёСЏ.</i>",
+    buy_title:   "<b>Тарифы VPN</b>",
+    buy_balance: (v) => `<blockquote>Ваш баланс: <b>${rub(v)}</b></blockquote>`,
+    buy_active:  "<i>⚠️ Подписка уже активна. Купить новую можно после истечения.</i>",
+    buy_trial_active: "<i>✅ Пробный период активен. Купить тариф можно прямо сейчас — пробный будет заменён.</i>",
+    buy_new:     "<i>Выберите тариф для оформления.</i>",
     // Topup
-    topup_title: "<b>РЎРїРѕСЃРѕР±С‹ РїРѕРїРѕР»РЅРµРЅРёСЏ</b>",
-    topup_other: (v) => v || "<i>Р”СЂСѓРіРёРµ СЃРїРѕСЃРѕР±С‹ РЅРµ РЅР°СЃС‚СЂРѕРµРЅС‹.</i>",
+    topup_title: "<b>Способы пополнения</b>",
+    topup_other: (v) => v || "<i>Другие способы не настроены.</i>",
     // Referrals
-    ref_title:   "<b>Р РµС„РµСЂР°Р»СЊРЅР°СЏ РїСЂРѕРіСЂР°РјРјР°</b>",
-    ref_desc:    (pct) => `РџСЂРёРіР»Р°С€Р°Р№С‚Рµ РґСЂСѓР·РµР№ Рё РїРѕР»СѓС‡Р°Р№С‚Рµ <b>${pct}%</b> СЃ РєР°Р¶РґРѕР№ РёС… РїРѕРєСѓРїРєРё.`,
-    ref_invited: (v) => `РџСЂРёРіР»Р°С€РµРЅРѕ: <b>${v}</b>`,
-    ref_earned:  (v) => `Р—Р°СЂР°Р±РѕС‚Р°РЅРѕ РІСЃРµРіРѕ: <b>${rub(v)}</b>`,
+    ref_title:   "<b>Реферальная программа</b>",
+    ref_desc:    (pct) => `Приглашайте друзей и получайте <b>${pct}%</b> с каждой их покупки.`,
+    ref_invited: (v) => `Приглашено: <b>${v}</b>`,
+    ref_earned:  (v) => `Заработано всего: <b>${rub(v)}</b>`,
 
-    ref_link_hdr:"Р’Р°С€Р° СЂРµС„РµСЂР°Р»СЊРЅР°СЏ СЃСЃС‹Р»РєР°:",
-    ref_bonus:   (pct, amt) => `<blockquote>+${rub(amt)} вЂ” СЂРµС„. РІРѕР·РЅР°РіСЂР°Р¶РґРµРЅРёРµ ${pct}%</blockquote>`,
+    ref_link_hdr:"Ваша реферальная ссылка:",
+    ref_bonus:   (pct, amt) => `<blockquote>+${rub(amt)} — реф. вознаграждение ${pct}%</blockquote>`,
     // Gift
-    gift_title:  "<b>РџРѕРґР°СЂРёС‚СЊ РїРѕРґРїРёСЃРєСѓ</b>",
-    gift_choose: "Р’С‹Р±РµСЂРёС‚Рµ С‚Р°СЂРёС„:",
-    gift_recv:   "<b>Р’С‹Р±РµСЂРёС‚Рµ РїРѕР»СѓС‡Р°С‚РµР»СЏ</b>",
-    gift_recv_d: "Р’С‹Р±РµСЂРёС‚Рµ РёР· СЃРїРёСЃРєР° РёР»Рё РІРІРµРґРёС‚Рµ ID:",
-    gift_confirm_title: "<b>РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ РїРѕРґР°СЂРєР°</b>",
-    gift_to:     (v) => `РџРѕР»СѓС‡Р°С‚РµР»СЊ: <b>${esc(v)}</b>`,
-    gift_plan:   (v) => `РўР°СЂРёС„: <b>${esc(v)}</b>`,
-    gift_price:  (v) => `РЎРїРёС€РµС‚СЃСЏ: <b>${rub(v)}</b>`,
-    gift_after:  (v) => `Р‘Р°Р»Р°РЅСЃ РїРѕСЃР»Рµ: <b>${rub(v)}</b>`,
-    gift_sent:   "<b>РџРѕРґР°СЂРѕРє РѕС‚РїСЂР°РІР»РµРЅ!</b>",
-    gift_rcvd:   "<b>Р’Р°Рј РїРѕРґР°СЂРёР»Рё РїРѕРґРїРёСЃРєСѓ!</b>",
-    gift_no_bal: (need,have) => `РќСѓР¶РЅРѕ ${rub(need)}, Сѓ РІР°СЃ ${rub(have)}`,
-    gift_self:   "РќРµР»СЊР·СЏ РїРѕРґР°СЂРёС‚СЊ СЃР°РјРѕРјСѓ СЃРµР±Рµ.",
-    gift_enter_id: "Р’РІРµРґРёС‚Рµ Telegram ID РёР»Рё @username РїРѕР»СѓС‡Р°С‚РµР»СЏ:",
+    gift_title:  "<b>Подарить подписку</b>",
+    gift_choose: "Выберите тариф:",
+    gift_recv:   "<b>Выберите получателя</b>",
+    gift_recv_d: "Выберите из списка или введите ID:",
+    gift_confirm_title: "<b>Подтверждение подарка</b>",
+    gift_to:     (v) => `Получатель: <b>${esc(v)}</b>`,
+    gift_plan:   (v) => `Тариф: <b>${esc(v)}</b>`,
+    gift_price:  (v) => `Спишется: <b>${rub(v)}</b>`,
+    gift_after:  (v) => `Баланс после: <b>${rub(v)}</b>`,
+    gift_sent:   "<b>Подарок отправлен!</b>",
+    gift_rcvd:   "<b>Вам подарили подписку!</b>",
+    gift_no_bal: (need,have) => `Нужно ${rub(need)}, у вас ${rub(have)}`,
+    gift_self:   "Нельзя подарить самому себе.",
+    gift_enter_id: "Введите Telegram ID или @username получателя:",
     // About
-    about_title: "<b>рџЊђ Рћ СЃРµСЂРІРёСЃРµ Dreinn VPN</b>",
+    about_title: "<b>🌐 О сервисе Dreinn VPN</b>",
     about_text:  [
-      "<b>вљЎпёЏ Р’РѕР·РјРѕР¶РЅРѕСЃС‚Рё</b>",
-      "вЂў Р’С‹Р±РѕСЂ СЃС‚СЂР°РЅ РїРѕРґРєР»СЋС‡РµРЅРёСЏ",
-      "вЂў Р‘С‹СЃС‚СЂРѕРµ Рё СЃС‚Р°Р±РёР»СЊРЅРѕРµ СЃРѕРµРґРёРЅРµРЅРёРµ",
-      "вЂў Р Р°Р±РѕС‚Р°РµС‚ РєРѕСЂСЂРµРєС‚РЅРѕ СЃ Р»СЋР±С‹РјРё РїСЂРёР»РѕР¶РµРЅРёСЏРјРё вЂ” РјРѕР¶РЅРѕ РѕСЃС‚Р°РІР»СЏС‚СЊ РІРєР»СЋС‡С‘РЅРЅС‹Рј РїРѕСЃС‚РѕСЏРЅРЅРѕ",
-      "вЂў РџРѕРґРґРµСЂР¶РєР° РІСЃРµС… РїРѕРїСѓР»СЏСЂРЅС‹С… СѓСЃС‚СЂРѕР№СЃС‚РІ",
+      "<b>⚡️ Возможности</b>",
+      "• Выбор стран подключения",
+      "• Быстрое и стабильное соединение",
+      "• Работает корректно с любыми приложениями — можно оставлять включённым постоянно",
+      "• Поддержка всех популярных устройств",
       "",
-      "<b>рџ§­ РЈРјРЅР°СЏ РјР°СЂС€СЂСѓС‚РёР·Р°С†РёСЏ</b>",
-      "РЎРµСЂРІРёСЃС‹, С‚СЂРµР±СѓСЋС‰РёРµ Р»РѕРєР°Р»СЊРЅРѕРіРѕ РґРѕСЃС‚СѓРїР°, Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРѕРґРєР»СЋС‡Р°СЋС‚СЃСЏ С‡РµСЂРµР· СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓСЋС‰РёР№ СЂРµРіРёРѕРЅ. РћСЃС‚Р°Р»СЊРЅС‹Рµ СЂРµСЃСѓСЂСЃС‹ РѕС‚РєСЂС‹РІР°СЋС‚СЃСЏ С‡РµСЂРµР· РІС‹Р±СЂР°РЅРЅСѓСЋ РІР°РјРё СЃС‚СЂР°РЅСѓ. Р’СЃС‘ СЂР°Р±РѕС‚Р°РµС‚ РїР»Р°РІРЅРѕ, Р±РµР· РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё СЂСѓС‡РЅРѕРіРѕ РїРµСЂРµРєР»СЋС‡РµРЅРёСЏ.",
+      "<b>🧭 Умная маршрутизация</b>",
+      "Сервисы, требующие локального доступа, автоматически подключаются через соответствующий регион. Остальные ресурсы открываются через выбранную вами страну. Всё работает плавно, без необходимости ручного переключения.",
       "",
-      "<b>рџ›Ў РљРѕРЅС„РёРґРµРЅС†РёР°Р»СЊРЅРѕСЃС‚СЊ</b>",
-      "РњС‹ Р·Р°Р±РѕС‚РёРјСЃСЏ Рѕ РІР°С€РµР№ РїСЂРёРІР°С‚РЅРѕСЃС‚Рё: РЅРµ СЃРѕС…СЂР°РЅСЏРµРј РёСЃС‚РѕСЂРёСЋ РґРµР№СЃС‚РІРёР№ Рё РЅРµ РїРµСЂРµРґР°С‘Рј РґР°РЅРЅС‹Рµ СЃС‚РѕСЂРѕРЅРЅРёРј СЃРµСЂРІРёСЃР°Рј. Р’СЃРµ СЃРІРµРґРµРЅРёСЏ Рѕ РїРѕРґРєР»СЋС‡РµРЅРёСЏС… СѓРґР°Р»СЏСЋС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.",
+      "<b>🛡 Конфиденциальность</b>",
+      "Мы заботимся о вашей приватности: не сохраняем историю действий и не передаём данные сторонним сервисам. Все сведения о подключениях удаляются автоматически.",
     ].join("\n"),
-    // Guide вЂ” stored in settings, parsed at render time
-    guide_title: "<b>РРЅСЃС‚СЂСѓРєС†РёСЏ РїРѕ РїРѕРґРєР»СЋС‡РµРЅРёСЋ</b>",
+    // Guide — stored in settings, parsed at render time
+    guide_title: "<b>Инструкция по подключению</b>",
     // Confirm buy
-    confirm_title: (mode) => `<b>${mode==="renew"?"РџСЂРѕРґР»РµРЅРёРµ РїРѕРґРїРёСЃРєРё":"РџРѕРєСѓРїРєР° РїРѕРґРїРёСЃРєРё"}</b>`,
-    confirm_plan:  (v) => `РўР°СЂРёС„: <b>${esc(v)}</b>`,
-    confirm_price: (v) => `РЎС‚РѕРёРјРѕСЃС‚СЊ: <b>${rub(v)}</b>`,
-    confirm_bal:   (v) => `Р‘Р°Р»Р°РЅСЃ: <b>${rub(v)}</b>`,
-    confirm_after: (v) => `РџРѕСЃР»Рµ РѕРїР»Р°С‚С‹: <b>${rub(v)}</b>`,
-    confirm_low:   "вљ пёЏ <i>РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЃСЂРµРґСЃС‚РІ. РџРѕРїРѕР»РЅРёС‚Рµ Р±Р°Р»Р°РЅСЃ.</i>",
-    confirm_ok:    "РџРѕРґС‚РІРµСЂРґРёС‚Рµ РѕРїР»Р°С‚Сѓ в†“",
+    confirm_title: (mode) => `<b>${mode==="renew"?"Продление подписки":"Покупка подписки"}</b>`,
+    confirm_plan:  (v) => `Тариф: <b>${esc(v)}</b>`,
+    confirm_price: (v) => `Стоимость: <b>${rub(v)}</b>`,
+    confirm_bal:   (v) => `Баланс: <b>${rub(v)}</b>`,
+    confirm_after: (v) => `После оплаты: <b>${rub(v)}</b>`,
+    confirm_low:   "⚠️ <i>Недостаточно средств. Пополните баланс.</i>",
+    confirm_ok:    "Подтвердите оплату ↓",
     // Success buy
-    success_title: "<b>РћРїР»Р°С‚Р° РїСЂРѕС€Р»Р° СѓСЃРїРµС€РЅРѕ!</b>",
-    success_plan:  (v) => `РўР°СЂРёС„: <b>${esc(v)}</b>`,
-    success_paid:  (v) => `РЎРїРёСЃР°РЅРѕ: <b>${rub(v)}</b>`,
-    success_bal:   (v) => `Р‘Р°Р»Р°РЅСЃ: <b>${rub(v)}</b>`,
-    success_exp:   (v) => `РСЃС‚РµРєР°РµС‚: <b>${v}</b>`,
+    success_title: "<b>Оплата прошла успешно!</b>",
+    success_plan:  (v) => `Тариф: <b>${esc(v)}</b>`,
+    success_paid:  (v) => `Списано: <b>${rub(v)}</b>`,
+    success_bal:   (v) => `Баланс: <b>${rub(v)}</b>`,
+    success_exp:   (v) => `Истекает: <b>${v}</b>`,
 
     // Crypto
-    crypto_title:  "<b>РџРѕРїРѕР»РЅРµРЅРёРµ С‡РµСЂРµР· Crypto Bot</b>",
-    crypto_desc:   "РћРїР»Р°С‚Р° РІ USDT (TRC20). РњРіРЅРѕРІРµРЅРЅРѕРµ Р·Р°С‡РёСЃР»РµРЅРёРµ.",
-    crypto_min:    (v) => `РњРёРЅРёРјСѓРј: <b>${rub(v)}</b>`,
-    crypto_rate:   (v) => `РљСѓСЂСЃ USDT: <b>${v.toFixed(2)} в‚Ѕ</b>`,
-    crypto_enter:  "Р’РІРµРґРёС‚Рµ СЃСѓРјРјСѓ РІ СЂСѓР±Р»СЏС…:",
-    crypto_inv:    "<b>РЎС‡С‘С‚ СЃРѕР·РґР°РЅ</b>",
-    crypto_sum:    (rub_,usdt) => `РЎСѓРјРјР°: <b>${rub_}</b> в†’ <b>${usdt} USDT</b>`,
-    crypto_steps:  "1 вЂ” РќР°Р¶РјРёС‚Рµ В«РћРїР»Р°С‚РёС‚СЊВ»\n2 вЂ” РџРµСЂРµРІРµРґРёС‚Рµ USDT РІ @CryptoBot\n3 вЂ” Р’РµСЂРЅРёС‚РµСЃСЊ Рё РїСЂРѕРІРµСЂСЊС‚Рµ РѕРїР»Р°С‚Сѓ",
-    crypto_ttl:    "<i>РЎС‡С‘С‚ РґРµР№СЃС‚РІРёС‚РµР»РµРЅ 1 С‡Р°СЃ.</i>",
-    crypto_ok:     (v) => `<b>Р—Р°С‡РёСЃР»РµРЅРѕ ${rub(v)}</b>`,
+    crypto_title:  "<b>Пополнение через Crypto Bot</b>",
+    crypto_desc:   "Оплата в USDT (TRC20). Мгновенное зачисление.",
+    crypto_min:    (v) => `Минимум: <b>${rub(v)}</b>`,
+    crypto_rate:   (v) => `Курс USDT: <b>${v.toFixed(2)} ₽</b>`,
+    crypto_enter:  "Введите сумму в рублях:",
+    crypto_inv:    "<b>Счёт создан</b>",
+    crypto_sum:    (rub_,usdt) => `Сумма: <b>${rub_}</b> → <b>${usdt} USDT</b>`,
+    crypto_steps:  "1 — Нажмите «Оплатить»\n2 — Переведите USDT в @CryptoBot\n3 — Вернитесь и проверьте оплату",
+    crypto_ttl:    "<i>Счёт действителен 1 час.</i>",
+    crypto_ok:     (v) => `<b>Зачислено ${rub(v)}</b>`,
     // FreeKassa
-    fk_title:      (method) => `<b>РџРѕРїРѕР»РЅРµРЅРёРµ С‡РµСЂРµР· ${esc(method || "РІС‹Р±СЂР°РЅРЅС‹Р№ СЃРїРѕСЃРѕР±")}</b>`,
-    fk_enter:      "Р’РІРµРґРёС‚Рµ СЃСѓРјРјСѓ РІ СЂСѓР±Р»СЏС…:",
-    fk_min:        (v) => `РњРёРЅРёРјСѓРј: <b>${rub(v)}</b>`,
-    fk_created:    "<b>РЎС‡С‘С‚ СЃРѕР·РґР°РЅ</b>",
-    fk_steps:      "1 вЂ” РќР°Р¶РјРёС‚Рµ В«РћРїР»Р°С‚РёС‚СЊВ»\n2 вЂ” Р—Р°РІРµСЂС€РёС‚Рµ РїР»Р°С‚С‘Р¶ РЅР° СЃР°Р№С‚Рµ\n3 вЂ” Р‘Р°Р»Р°РЅСЃ Р·Р°С‡РёСЃР»РёС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё",
-    fk_wait:       "<i>Р•СЃР»Рё РѕРїР»Р°С‚Р° СѓР¶Рµ РІС‹РїРѕР»РЅРµРЅР°, РЅР°Р¶РјРёС‚Рµ В«РџСЂРѕРІРµСЂРёС‚СЊ РѕРїР»Р°С‚СѓВ».</i>",
-    fk_ok:         (v) => `<b>Р—Р°С‡РёСЃР»РµРЅРѕ ${rub(v)}</b>`,
+    fk_title:      (method) => `<b>Пополнение через ${esc(method || "выбранный способ")}</b>`,
+    fk_enter:      "Введите сумму в рублях:",
+    fk_min:        (v) => `Минимум: <b>${rub(v)}</b>`,
+    fk_created:    "<b>Счёт создан</b>",
+    fk_steps:      "1 — Нажмите «Оплатить»\n2 — Завершите платёж на сайте\n3 — Баланс зачислится автоматически",
+    fk_wait:       "<i>Если оплата уже выполнена, нажмите «Проверить оплату».</i>",
+    fk_ok:         (v) => `<b>Зачислено ${rub(v)}</b>`,
     // Purchases history
-    ph_title:      "<b>РСЃС‚РѕСЂРёСЏ РїРѕРєСѓРїРѕРє</b>",
-    ph_empty:      "РџРѕРєСѓРїРѕРє РїРѕРєР° РЅРµС‚.",
-    ph_page:       (p,t) => `РЎС‚СЂР°РЅРёС†Р° ${p+1} РёР· ${t}`,
+    ph_title:      "<b>История покупок</b>",
+    ph_empty:      "Покупок пока нет.",
+    ph_page:       (p,t) => `Страница ${p+1} из ${t}`,
     // Ref history
-    rh_title:      "<b>РСЃС‚РѕСЂРёСЏ РЅР°С‡РёСЃР»РµРЅРёР№</b>",
-    rh_empty:      "РќР°С‡РёСЃР»РµРЅРёР№ РїРѕРєР° РЅРµС‚.",
+    rh_title:      "<b>История начислений</b>",
+    rh_empty:      "Начислений пока нет.",
     // Other
-    other_title:   "<b>РќР°СЃС‚СЂРѕР№РєРё</b>",
-    other_proxy:   "рџ†“ Р‘РµСЃРїР»Р°С‚РЅС‹Рµ РїСЂРѕРєСЃРё РґР»СЏ Telegram",
+    other_title:   "<b>Настройки</b>",
+    other_proxy:   "🆓 Бесплатные прокси для Telegram",
     // Promo codes
-    btn_promo:      "рџЋџ Р’РІРµСЃС‚Рё РїСЂРѕРјРѕРєРѕРґ",
-    promo_enter:    "Р’РІРµРґРёС‚Рµ РїСЂРѕРјРѕРєРѕРґ:",
-    promo_ok:       (pct, code) => `вњ… РџСЂРѕРјРѕРєРѕРґ <b>${esc(code)}</b> РїСЂРёРјРµРЅС‘РЅ вЂ” СЃРєРёРґРєР° <b>${pct}%</b>`,
-    promo_invalid:  "вќЊ РџСЂРѕРјРѕРєРѕРґ РЅРµ РЅР°Р№РґРµРЅ РёР»Рё РёСЃС‚С‘Рє.",
-    promo_used:     "вќЊ РџСЂРѕРјРѕРєРѕРґ СѓР¶Рµ Р±С‹Р» РёСЃРїРѕР»СЊР·РѕРІР°РЅ. РљР°Р¶РґС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РјРѕР¶РµС‚ РїСЂРёРјРµРЅРёС‚СЊ С‚РѕР»СЊРєРѕ РѕРґРёРЅ РїСЂРѕРјРѕРєРѕРґ.",
-    promo_applied:  (pct) => `<i>РџСЂРѕРјРѕРєРѕРґ: СЃРєРёРґРєР° ${pct}%</i>`,
+    btn_promo:      "🎟 Ввести промокод",
+    promo_enter:    "Введите промокод:",
+    promo_ok:       (pct, code) => `✅ Промокод <b>${esc(code)}</b> применён — скидка <b>${pct}%</b>`,
+    promo_invalid:  "❌ Промокод не найден или истёк.",
+    promo_used:     "❌ Промокод уже был использован. Каждый пользователь может применить только один промокод.",
+    promo_applied:  (pct) => `<i>Промокод: скидка ${pct}%</i>`,
     // Direct payment (when buying tariff without balance)
-    btn_pay_balance:"рџ’і РћРїР»Р°С‚РёС‚СЊ СЃ Р±Р°Р»Р°РЅСЃР°",
-    direct_title:   (plan, price) => `<b>РћРїР»Р°С‚Р°: ${esc(plan)}</b>\n\nРЎСѓРјРјР°: <b>${price}</b>\n\nР’С‹Р±РµСЂРёС‚Рµ СЃРїРѕСЃРѕР± РѕРїР»Р°С‚С‹:`,
-    direct_no_bal:  (need, have) => `вљ пёЏ РќР° Р±Р°Р»Р°РЅСЃРµ <b>${have}</b>, РЅСѓР¶РЅРѕ <b>${need}</b>. РџРѕРїРѕР»РЅРёС‚Рµ РёР»Рё РѕРїР»Р°С‚РёС‚Рµ РЅР°РїСЂСЏРјСѓСЋ:`,
+    btn_pay_balance:"💳 Оплатить с баланса",
+    direct_title:   (plan, price) => `<b>Оплата: ${esc(plan)}</b>\n\nСумма: <b>${price}</b>\n\nВыберите способ оплаты:`,
+    direct_no_bal:  (need, have) => `⚠️ На балансе <b>${have}</b>, нужно <b>${need}</b>. Пополните или оплатите напрямую:`,
     // Expiry notifications
-    notify_3days:   (plan, days) => `вЏ° <b>РќР°РїРѕРјРёРЅР°РЅРёРµ</b>\n\nР’Р°С€Р° РїРѕРґРїРёСЃРєР° В«${esc(plan)}В» РёСЃС‚РµРєР°РµС‚ С‡РµСЂРµР· <b>${days} РґРЅ.</b>\n\nРџСЂРѕРґР»РёС‚Рµ Р·Р°СЂР°РЅРµРµ, С‡С‚РѕР±С‹ РЅРµ С‚РµСЂСЏС‚СЊ РґРѕСЃС‚СѓРї.`,
-    notify_1day:    (plan) => `рџ”ґ <b>РџРѕРґРїРёСЃРєР° РёСЃС‚РµРєР°РµС‚ Р·Р°РІС‚СЂР°!</b>\n\nРўР°СЂРёС„ В«${esc(plan)}В» Р·Р°РєР°РЅС‡РёРІР°РµС‚СЃСЏ. РџСЂРѕРґР»РёС‚Рµ СЃРµР№С‡Р°СЃ.`,
-    notify_expired: (plan) => `вќЊ <b>РџРѕРґРїРёСЃРєР° РёСЃС‚РµРєР»Р°</b>\n\nРўР°СЂРёС„ В«${esc(plan)}В» Р·Р°РєРѕРЅС‡РёР»СЃСЏ. РћС„РѕСЂРјРёС‚Рµ РЅРѕРІС‹Р№, С‡С‚РѕР±С‹ РїСЂРѕРґРѕР»Р¶РёС‚СЊ РїРѕР»СЊР·РѕРІР°С‚СЊСЃСЏ VPN.`,
-    btn_renew_now:  "рџ”„ РџСЂРѕРґР»РёС‚СЊ СЃРµР№С‡Р°СЃ",
+    notify_3days:   (plan, days) => `⏰ <b>Напоминание</b>\n\nВаша подписка «${esc(plan)}» истекает через <b>${days} дн.</b>\n\nПродлите заранее, чтобы не терять доступ.`,
+    notify_1day:    (plan) => `🔴 <b>Подписка истекает завтра!</b>\n\nТариф «${esc(plan)}» заканчивается. Продлите сейчас.`,
+    notify_expired: (plan) => `❌ <b>Подписка истекла</b>\n\nТариф «${esc(plan)}» закончился. Оформите новый, чтобы продолжить пользоваться VPN.`,
+    btn_renew_now:  "🔄 Продлить сейчас",
     // Admin grant sub
-    admin_grant_pick: "Р’С‹Р±РµСЂРёС‚Рµ С‚Р°СЂРёС„ РґР»СЏ РІС‹РґР°С‡Рё:",
-    admin_grant_ok: (name, plan) => `вњ… РџРѕРґРїРёСЃРєР° В«${esc(plan)}В» РІС‹РґР°РЅР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ ${esc(name)}.`,
-    admin_grant_rcvd: (plan, days) => `рџЋЃ <b>Р’Р°Рј РІС‹РґР°РЅР° РїРѕРґРїРёСЃРєР°!</b>\n\nРўР°СЂРёС„: <b>${esc(plan)}</b>\nР”РѕСЃС‚СѓРї РѕС‚РєСЂС‹С‚ РЅР° <b>${days} РґРЅ.</b>`,
-    btn_grant_sub:  "рџЋЃ Р’С‹РґР°С‚СЊ РїРѕРґРїРёСЃРєСѓ",
+    admin_grant_pick: "Выберите тариф для выдачи:",
+    admin_grant_ok: (name, plan) => `✅ Подписка «${esc(plan)}» выдана пользователю ${esc(name)}.`,
+    admin_grant_rcvd: (plan, days) => `🎁 <b>Вам выдана подписка!</b>\n\nТариф: <b>${esc(plan)}</b>\nДоступ открыт на <b>${days} дн.</b>`,
+    btn_grant_sub:  "🎁 Выдать подписку",
     // Admin promo
-    admin_promo_list: "<b>РџСЂРѕРјРѕРєРѕРґС‹</b>",
-    admin_promo_empty:"РџСЂРѕРјРѕРєРѕРґРѕРІ РЅРµС‚.",
-    admin_promo_add: "Р’РІРµРґРёС‚Рµ РїСЂРѕРјРѕРєРѕРґ РІ С„РѕСЂРјР°С‚Рµ:\n<code>РљРћР” РЎРљРР”РљРђ_% [MAX_РРЎРџРћР›Р¬Р—РћР’РђРќРР™]</code>\nРџСЂРёРјРµСЂ: <code>SALE10 10 100</code>\n",
+    admin_promo_list: "<b>Промокоды</b>",
+    admin_promo_empty:"Промокодов нет.",
+    admin_promo_add: "Введите промокод в формате:\n<code>КОД СКИДКА_% [MAX_ИСПОЛЬЗОВАНИЙ]</code>\nПример: <code>SALE10 10 100</code>\n",
     // Ref history page (was hardcoded RU)
-    rh_page:        (p, t) => `РЎС‚СЂ. ${p+1}/${t}`,
+    rh_page:        (p, t) => `Стр. ${p+1}/${t}`,
     // Device selection
-    dev_title:      "рџљЂ <b>РќР°СЃС‚СЂРѕР№РєР° С‚Р°СЂРёС„Р°</b>",
-    dev_base:       (n) => `Р‘Р°Р·РѕРІРѕ: <b>${n} СѓСЃС‚СЂ.</b>`,
-    dev_now:        (n) => `РЎРµР№С‡Р°СЃ: <b>${n} СѓСЃС‚СЂ.</b>`,
-    dev_price:      (v) => `рџ’° Рљ РѕРїР»Р°С‚Рµ: <b>${rub(v)}</b>`,
-    dev_hint:       "Р’С‹Р±РµСЂРёС‚Рµ РєРѕР»РёС‡РµСЃС‚РІРѕ СѓСЃС‚СЂРѕР№СЃС‚РІ:",
-    dev_pay:        (v) => `РћРїР»Р°С‚РёС‚СЊ ${rub(v)}`,
-    dev_surcharge:  (v) => `<i>+${rub(v)} Р·Р° РґРѕРї. СѓСЃС‚СЂРѕР№СЃС‚РІР°</i>`,
-    btn_devices_extra:"вљ™пёЏ Р¦РµРЅР° Р·Р° РґРѕРї. СѓСЃС‚СЂРѕР№СЃС‚РІРѕ",
+    dev_title:      "🚀 <b>Настройка тарифа</b>",
+    dev_base:       (n) => `Базово: <b>${n} устр.</b>`,
+    dev_now:        (n) => `Сейчас: <b>${n} устр.</b>`,
+    dev_price:      (v) => `💰 К оплате: <b>${rub(v)}</b>`,
+    dev_hint:       "Выберите количество устройств:",
+    dev_pay:        (v) => `Оплатить ${rub(v)}`,
+    dev_surcharge:  (v) => `<i>+${rub(v)} за доп. устройства</i>`,
+    btn_devices_extra:"⚙️ Цена за доп. устройство",
   },
   en: {
-    btn_back:       "В« Back",
-    btn_home:       "В« Main menu",
-    btn_profile:    "рџ‘¤ Profile",
-    btn_buy:        "рџ’і Buy VPN",
-    btn_ref:        "рџ¤ќ Referrals",
-    btn_about:      "в„№пёЏ About",
-    btn_lang:       "рџЊђ Language",
-    btn_guide:      "рџ“‹ Guide",
-    btn_sub:        "в­ђ My subscription",
-    btn_sub_active: "в­ђ Open subscription",
-    btn_hist:       "рџ—‚ History",
-    btn_other:      "вљ™пёЏ Other",
-    btn_other_topup:"рџ’° Top up",
-    btn_other_gift: "рџЋЃ Gift subscription",
-    btn_back_profile:"В« Back to profile",
-    btn_topup:      "рџ’° Top up methods",
-    btn_buy_sub:    "рџ’і Buy subscription",
-    btn_gift_send:  "рџЋЃ Gift",
-    btn_invite:     "рџ“Ё Invite a friend",
+    btn_back:       "« Back",
+    btn_home:       "« Main menu",
+    btn_profile:    "👤 Profile",
+    btn_buy:        "💳 Buy VPN",
+    btn_ref:        "🤝 Referrals",
+    btn_about:      "ℹ️ About",
+    btn_lang:       "🌐 Language",
+    btn_guide:      "📋 Guide",
+    btn_sub:        "⭐ My subscription",
+    btn_sub_active: "⭐ Open subscription",
+    btn_hist:       "🗂 History",
+    btn_other:      "⚙️ Other",
+    btn_other_topup:"💰 Top up",
+    btn_other_gift: "🎁 Gift subscription",
+    btn_back_profile:"« Back to profile",
+    btn_topup:      "💰 Top up methods",
+    btn_buy_sub:    "💳 Buy subscription",
+    btn_gift_send:  "🎁 Gift",
+    btn_invite:     "📨 Invite a friend",
 
-    btn_qr:         "рџ“· Subscription QR Code",
-    btn_ref_code:   "рџ”„ Reset ref code",
-    ref_code_confirm: "вљ пёЏ <b>Reset referral code?</b>\n\n<i>All old links will stop working.</i>",
-    sub_qr_caption: "рџ“· <b>Subscription QR Code</b>\n\n<i>Scan with your camera or Dreinn VPN to connect.</i>",
-    btn_ref_hist:   "рџ“‹ Earnings history",
-    btn_support:    "рџ’¬ Support",
-    btn_privacy:    "рџ”’ Privacy policy",
-    btn_terms:      "рџ“„ Terms of service",
-    btn_status:     "рџ“Љ Server status",
-    btn_proxy:      "рџ†“ Free proxies",
-    btn_copy_link:  "рџ“‹ Copy link",
-    btn_connect:    "рџ“І Connect device",
-    btn_renew:      "рџ”„ Renew",
-    btn_gift_tab:   "рџЋЃ Gift subscription",
-    btn_confirm:    "вњ… Confirm",
-    btn_cancel:     "вќЊ Cancel",
-    btn_check:      "вњ… Check payment",
-    btn_pay_crypto: "рџ’Ћ Crypto Bot (USDT)",
-    btn_pay_other:  "рџ’і Other payment methods",
-    btn_pay_qr:     "рџ“· SBP (QR)",
-    btn_pay_card:   "рџ’і Russian bank card",
-    btn_pay_sber:   "рџџў SberPay",
+    btn_qr:         "📷 Subscription QR Code",
+    btn_ref_code:   "🔄 Reset ref code",
+    ref_code_confirm: "⚠️ <b>Reset referral code?</b>\n\n<i>All old links will stop working.</i>",
+    sub_qr_caption: "📷 <b>Subscription QR Code</b>\n\n<i>Scan with your camera or Dreinn VPN to connect.</i>",
+    btn_ref_hist:   "📋 Earnings history",
+    btn_support:    "💬 Support",
+    btn_privacy:    "🔒 Privacy policy",
+    btn_terms:      "📄 Terms of service",
+    btn_status:     "📊 Server status",
+    btn_proxy:      "🆓 Free proxies",
+    btn_copy_link:  "📋 Copy link",
+    btn_connect:    "📲 Connect device",
+    btn_renew:      "🔄 Renew",
+    btn_gift_tab:   "🎁 Gift subscription",
+    btn_confirm:    "✅ Confirm",
+    btn_cancel:     "❌ Cancel",
+    btn_check:      "✅ Check payment",
+    btn_pay_crypto: "💎 Crypto Bot (USDT)",
+    btn_pay_other:  "💳 Other payment methods",
+    btn_pay_qr:     "📷 SBP (QR)",
+    btn_pay_card:   "💳 Russian bank card",
+    btn_pay_sber:   "🟢 SberPay",
     // Channel gate
-    btn_check_sub:  "вњ… I've subscribed",
-    btn_open_channel:"рџ“ў Open channel",
-    gate_text:      (url) => `<b>To use the bot you need to subscribe to our channel.</b>\n\n<a href="${url}">рџ‘‰ Go to channel</a>`,
-    gate_not_subscribed: "вќЊ You haven't subscribed to the channel yet. Subscribe and tap В«I've subscribedВ».",
+    btn_check_sub:  "✅ I've subscribed",
+    btn_open_channel:"📢 Open channel",
+    gate_text:      (url) => `<b>To use the bot you need to subscribe to our channel.</b>\n\n<a href="${url}">👉 Go to channel</a>`,
+    gate_not_subscribed: "❌ You haven't subscribed to the channel yet. Subscribe and tap «I've subscribed».",
     // Trial
-    btn_trial:      "рџЋЃ Free trial (7 days)",
-    trial_confirm:  (days) => `<b>Free trial вЂ” ${days} days</b>\n\n<i>Free, one time only. After expiry you can buy any plan.</i>\n\nActivate?`,
-    trial_activated:(days) => `<b>вњ… Free trial activated!</b>\n\n<i>Access granted for ${days} days.</i>`,
+    btn_trial:      "🎁 Free trial (7 days)",
+    trial_confirm:  (days) => `<b>Free trial — ${days} days</b>\n\n<i>Free, one time only. After expiry you can buy any plan.</i>\n\nActivate?`,
+    trial_activated:(days) => `<b>✅ Free trial activated!</b>\n\n<i>Access granted for ${days} days.</i>`,
     trial_used_msg: "Free trial already used.",
     trial_has_sub:  "You already have an active subscription.",
-    channel_gate:   "рџ‘‹ To use the bot, please subscribe to our channel.",
-    btn_check_sub:  "вњ… I've subscribed",
-    lang_title:  "рџЊђ <b>Language</b>",
+    channel_gate:   "👋 To use the bot, please subscribe to our channel.",
+    btn_check_sub:  "✅ I've subscribed",
+    lang_title:  "🌐 <b>Language</b>",
     lang_current:"Current language",
-    lang_ru:     "рџ‡·рџ‡є Р СѓСЃСЃРєРёР№",
-    lang_en:     "рџ‡¬рџ‡§ English",
-    home_title:  (name) => `рџђё Hello, ${esc(name||"")}`,
-    home_info:   (id, bal) => `<blockquote>вЂ” Your ID: <code>${id}</code>\nвЂ” Your balance: <b>${rub(bal)}</b></blockquote>`,
-    home_footer: `Channel вЂ” @DreinnVPN\nSupport вЂ” @DreinnVPNSupportBot`,
+    lang_ru:     "🇷🇺 Русский",
+    lang_en:     "🇬🇧 English",
+    home_title:  (name) => `🐸 Hello, ${esc(name||"")}`,
+    home_info:   (id, bal) => `<blockquote>— Your ID: <code>${id}</code>\n— Your balance: <b>${rub(bal)}</b></blockquote>`,
+    home_footer: `Channel — @DreinnVPN\nSupport — @DreinnVPNSupportBot`,
     home_balance:(bal) => `<blockquote>Balance: <b>${rub(bal)}</b></blockquote>`,
-    home_sub_ok: (days) => `<i>Subscription active вЂ” ${days} days left</i>`,
+    home_sub_ok: (days) => `<i>Subscription active — ${days} days left</i>`,
     prof_title:  "<b>Profile</b>",
     prof_bal:    (v) => `Balance: <b>${rub(v)}</b>`,
     prof_refs:   (v) => `Referrals: <b>${v}</b>`,
     prof_id:     (v) => `ID: <code>${v}</code>`,
     sub_title:   "<b>My subscription</b>",
-    sub_none:    "No active subscription found.\n\n<i>Get a plan in В«Buy VPNВ».</i>",
+    sub_none:    "No active subscription found.\n\n<i>Get a plan in «Buy VPN».</i>",
     sub_plan:    (v) => `Plan: <b>${esc(v)}</b>`,
     sub_exp:     (v) => `Expires: <b>${v}</b>`,
     sub_left:    (d,h,m) => `Remaining: <b>${d}d ${h}h ${m}m</b>`,
@@ -393,8 +379,8 @@ const I18N = {
     sub_link_hdr:"Subscription link:",
     buy_title:   "<b>VPN Plans</b>",
     buy_balance: (v) => `<blockquote>Your balance: <b>${rub(v)}</b></blockquote>`,
-    buy_active:  "<i>вљ пёЏ Subscription is active. You can buy a new one after it expires.</i>",
-    buy_trial_active: "<i>вњ… Free trial is active. You can buy a plan now вЂ” the trial will be replaced.</i>",
+    buy_active:  "<i>⚠️ Subscription is active. You can buy a new one after it expires.</i>",
+    buy_trial_active: "<i>✅ Free trial is active. You can buy a plan now — the trial will be replaced.</i>",
     buy_new:     "<i>Choose a plan to subscribe.</i>",
     topup_title: "<b>Top up methods</b>",
     topup_other: (v) => v || "<i>Other methods not configured.</i>",
@@ -419,18 +405,18 @@ const I18N = {
     gift_no_bal: (need,have) => `Need ${rub(need)}, you have ${rub(have)}`,
     gift_self:   "You can't gift to yourself.",
     gift_enter_id: "Enter recipient's Telegram ID or @username:",
-    about_title: "<b>рџЊђ About Dreinn VPN</b>",
+    about_title: "<b>🌐 About Dreinn VPN</b>",
     about_text:  [
-      "<b>вљЎпёЏ Features</b>",
-      "вЂў Choice of connection countries",
-      "вЂў Fast and stable connection",
-      "вЂў Works seamlessly with any app вЂ” safe to leave on all the time",
-      "вЂў Supports all popular devices",
+      "<b>⚡️ Features</b>",
+      "• Choice of connection countries",
+      "• Fast and stable connection",
+      "• Works seamlessly with any app — safe to leave on all the time",
+      "• Supports all popular devices",
       "",
-      "<b>рџ§­ Smart routing</b>",
+      "<b>🧭 Smart routing</b>",
       "Services that require local access automatically connect through the appropriate region. Everything else opens through your chosen country. It all works smoothly, with no manual switching needed.",
       "",
-      "<b>рџ›Ў Privacy</b>",
+      "<b>🛡 Privacy</b>",
       "We care about your privacy: we do not store activity logs or share data with third parties. All connection records are deleted automatically.",
     ].join("\n"),
     guide_title: "<b>Connection guide</b>",
@@ -439,8 +425,8 @@ const I18N = {
     confirm_price: (v) => `Price: <b>${rub(v)}</b>`,
     confirm_bal:   (v) => `Balance: <b>${rub(v)}</b>`,
     confirm_after: (v) => `After payment: <b>${rub(v)}</b>`,
-    confirm_low:   "вљ пёЏ <i>Insufficient balance. Please top up.</i>",
-    confirm_ok:    "Confirm payment в†“",
+    confirm_low:   "⚠️ <i>Insufficient balance. Please top up.</i>",
+    confirm_ok:    "Confirm payment ↓",
     success_title: "<b>Payment successful!</b>",
     success_plan:  (v) => `Plan: <b>${esc(v)}</b>`,
     success_paid:  (v) => `Charged: <b>${rub(v)}</b>`,
@@ -450,11 +436,11 @@ const I18N = {
     crypto_title:  "<b>Top up via Crypto Bot</b>",
     crypto_desc:   "Pay in USDT (TRC20). Instant credit.",
     crypto_min:    (v) => `Minimum: <b>${rub(v)}</b>`,
-    crypto_rate:   (v) => `USDT rate: <b>${v.toFixed(2)} в‚Ѕ</b>`,
+    crypto_rate:   (v) => `USDT rate: <b>${v.toFixed(2)} ₽</b>`,
     crypto_enter:  "Enter amount in rubles:",
     crypto_inv:    "<b>Invoice created</b>",
-    crypto_sum:    (rub_,usdt) => `Amount: <b>${rub_}</b> в†’ <b>${usdt} USDT</b>`,
-    crypto_steps:  "1 вЂ” Tap В«PayВ»\n2 вЂ” Send USDT in @CryptoBot\n3 вЂ” Come back and check payment",
+    crypto_sum:    (rub_,usdt) => `Amount: <b>${rub_}</b> → <b>${usdt} USDT</b>`,
+    crypto_steps:  "1 — Tap «Pay»\n2 — Send USDT in @CryptoBot\n3 — Come back and check payment",
     crypto_ttl:    "<i>Invoice valid for 1 hour.</i>",
     crypto_ok:     (v) => `<b>Credited ${rub(v)}</b>`,
     // FreeKassa
@@ -462,8 +448,8 @@ const I18N = {
     fk_enter:      "Enter amount in rubles:",
     fk_min:        (v) => `Minimum: <b>${rub(v)}</b>`,
     fk_created:    "<b>Invoice created</b>",
-    fk_steps:      "1 вЂ” Tap В«PayВ»\n2 вЂ” Complete payment on the website\n3 вЂ” Balance will be credited automatically",
-    fk_wait:       "<i>If you already paid, tap В«Check paymentВ».</i>",
+    fk_steps:      "1 — Tap «Pay»\n2 — Complete payment on the website\n3 — Balance will be credited automatically",
+    fk_wait:       "<i>If you already paid, tap «Check payment».</i>",
     fk_ok:         (v) => `<b>Credited ${rub(v)}</b>`,
     ph_title:      "<b>Purchase history</b>",
     ph_empty:      "No purchases yet.",
@@ -471,63 +457,63 @@ const I18N = {
     rh_title:      "<b>Earnings history</b>",
     rh_empty:      "No earnings yet.",
     other_title:   "<b>Settings</b>",
-    other_proxy:   "рџ†“ Free Telegram proxies",
-    btn_promo:      "рџЋџ Enter promo code",
+    other_proxy:   "🆓 Free Telegram proxies",
+    btn_promo:      "🎟 Enter promo code",
     promo_enter:    "Enter promo code:",
-    promo_ok:       (pct, code) => `вњ… Promo code <b>${esc(code)}</b> applied вЂ” <b>${pct}%</b> discount`,
-    promo_invalid:  "вќЊ Promo code not found or expired.",
-    promo_used:     "вќЊ Promo code already used. Each user can apply only one promo code.",
+    promo_ok:       (pct, code) => `✅ Promo code <b>${esc(code)}</b> applied — <b>${pct}%</b> discount`,
+    promo_invalid:  "❌ Promo code not found or expired.",
+    promo_used:     "❌ Promo code already used. Each user can apply only one promo code.",
     promo_applied:  (pct) => `<i>Promo code: ${pct}% off</i>`,
-    btn_pay_balance:"рџ’і Pay from balance",
+    btn_pay_balance:"💳 Pay from balance",
     direct_title:   (plan, price) => `<b>Payment: ${esc(plan)}</b>\n\nAmount: <b>${price}</b>\n\nChoose payment method:`,
-    direct_no_bal:  (need, have) => `вљ пёЏ Balance <b>${have}</b>, need <b>${need}</b>. Top up or pay directly:`,
-    notify_3days:   (plan, days) => `вЏ° <b>Reminder</b>\n\nYour subscription В«${esc(plan)}В» expires in <b>${days} days</b>.\n\nRenew in advance to keep access.`,
-    notify_1day:    (plan) => `рџ”ґ <b>Subscription expires tomorrow!</b>\n\nPlan В«${esc(plan)}В» ends soon. Renew now.`,
-    notify_expired: (plan) => `вќЊ <b>Subscription expired</b>\n\nPlan В«${esc(plan)}В» has ended. Get a new one to continue using VPN.`,
-    btn_renew_now:  "рџ”„ Renew now",
+    direct_no_bal:  (need, have) => `⚠️ Balance <b>${have}</b>, need <b>${need}</b>. Top up or pay directly:`,
+    notify_3days:   (plan, days) => `⏰ <b>Reminder</b>\n\nYour subscription «${esc(plan)}» expires in <b>${days} days</b>.\n\nRenew in advance to keep access.`,
+    notify_1day:    (plan) => `🔴 <b>Subscription expires tomorrow!</b>\n\nPlan «${esc(plan)}» ends soon. Renew now.`,
+    notify_expired: (plan) => `❌ <b>Subscription expired</b>\n\nPlan «${esc(plan)}» has ended. Get a new one to continue using VPN.`,
+    btn_renew_now:  "🔄 Renew now",
     admin_grant_pick: "Choose a plan to grant:",
-    admin_grant_ok: (name, plan) => `вњ… Subscription В«${esc(plan)}В» granted to ${esc(name)}.`,
-    admin_grant_rcvd: (plan, days) => `рџЋЃ <b>You received a subscription!</b>\n\nPlan: <b>${esc(plan)}</b>\nAccess granted for <b>${days} days</b>.`,
-    btn_grant_sub:  "рџЋЃ Grant subscription",
+    admin_grant_ok: (name, plan) => `✅ Subscription «${esc(plan)}» granted to ${esc(name)}.`,
+    admin_grant_rcvd: (plan, days) => `🎁 <b>You received a subscription!</b>\n\nPlan: <b>${esc(plan)}</b>\nAccess granted for <b>${days} days</b>.`,
+    btn_grant_sub:  "🎁 Grant subscription",
     admin_promo_list: "<b>Promo codes</b>",
     admin_promo_empty:"No promo codes.",
     admin_promo_add: "Enter promo code as:\n<code>CODE DISCOUNT_% [MAX_USES]</code>\nExample: <code>SALE10 10 100</code>\n",
     rh_page:        (p, t) => `Page ${p+1}/${t}`,
     // Device selection
-    dev_title:      "рџљЂ <b>Plan Configuration</b>",
+    dev_title:      "🚀 <b>Plan Configuration</b>",
     dev_base:       (n) => `Base: <b>${n} dev.</b>`,
     dev_now:        (n) => `Now: <b>${n} dev.</b>`,
-    dev_price:      (v) => `рџ’° Total: <b>${rub(v)}</b>`,
+    dev_price:      (v) => `💰 Total: <b>${rub(v)}</b>`,
     dev_hint:       "Choose number of devices:",
     dev_pay:        (v) => `Pay ${rub(v)}`,
     dev_surcharge:  (v) => `<i>+${rub(v)} for extra devices</i>`,
-    btn_devices_extra:"вљ™пёЏ Extra device price",
+    btn_devices_extra:"⚙️ Extra device price",
   }
 };
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 const now     = () => Date.now();
 const esc     = (s) => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-const rub     = (n) => `${Number(n||0).toLocaleString("ru-RU")} в‚Ѕ`;
-const dt      = (ts, lang="ru") => ts ? new Date(ts).toLocaleDateString(lang==="en"?"en-GB":"ru-RU") : "вЂ”";
-const dts     = (ts) => ts ? new Date(ts).toLocaleString("ru-RU") : "вЂ”";
+const rub     = (n) => `${Number(n||0).toLocaleString("ru-RU")} ₽`;
+const dt      = (ts, lang="ru") => ts ? new Date(ts).toLocaleDateString(lang==="en"?"en-GB":"ru-RU") : "—";
+const dts     = (ts) => ts ? new Date(ts).toLocaleString("ru-RU") : "—";
 const isAdmin = (id) => Number(id) === ADMIN_ID;
 const sleep   = (ms) => new Promise(r => setTimeout(r, ms));
 const refLink = (code) => BOT_USERNAME
   ? `https://t.me/${BOT_USERNAME}?start=partner_${code}`
   : `https://t.me/?start=partner_${code}`;
 
-// [Label|URL] в†’ <a href="URL">Label</a>
+// [Label|URL] → <a href="URL">Label</a>
 function parseLinks(text) {
   return String(text||"").replace(/\[([^\]|]+)\|([^\]]+)\]/g, (_, label, url) =>
     `<a href="${url.trim()}">${esc(label.trim())}</a>`);
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Settings & dynamic links
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function setting(k, f = "")  { return db.prepare("SELECT value v FROM settings WHERE key=?").get(k)?.v ?? f; }
 function setSetting(k, v)    { db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(k, String(v ?? "")); }
 function delSetting(k)       { db.prepare("DELETE FROM settings WHERE key=?").run(k); }
@@ -558,7 +544,7 @@ function fkServerIp() {
 }
 
 // Configurable links (fallback to env / hardcoded defaults)
-// Normalize: @username в†’ https://t.me/username, bare username в†’ same
+// Normalize: @username → https://t.me/username, bare username → same
 function normalizeUrl(v) {
   if(!v) return "";
   v = String(v).trim();
@@ -578,16 +564,16 @@ const lnk = {
 // Per-section header images
 function viewImg(view) { return setting(`img_${view}`) || ""; }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Language helpers
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function getLang(uid)     { return db.prepare("SELECT lang FROM users WHERE tg_id=?").get(Number(uid))?.lang || "ru"; }
 function setLang(uid, lg) { db.prepare("UPDATE users SET lang=? WHERE tg_id=?").run(lg, Number(uid)); }
 function T(uid)           { return I18N[getLang(uid)] || I18N.ru; }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // DB helpers
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function user(id)     { return db.prepare("SELECT * FROM users WHERE tg_id=?").get(Number(id)); }
 function sub(id)      { return db.prepare("SELECT * FROM subscriptions WHERE tg_id=?").get(Number(id)); }
 function activeSub(s) { return !!(s && s.is_active===1 && s.expires_at>now() && s.sub_url); }
@@ -629,14 +615,14 @@ function addReferralReward(buyerId, amount) {
   db.prepare("INSERT INTO referrals(referrer_tg_id,invited_tg_id,amount_rub,percent,reward_rub,created_at) VALUES(?,?,?,?,?,?)").run(Number(r.tg_id),Number(buyerId),Number(amount),pct,reward,now());
   const isRu=getLang(r.tg_id)==="ru";
   const msg=isRu
-    ? `<blockquote>+${rub(reward)} вЂ” СЂРµС„РµСЂР°Р»СЊРЅРѕРµ РІРѕР·РЅР°РіСЂР°Р¶РґРµРЅРёРµ ${pct}%</blockquote>`
-    : `<blockquote>+${rub(reward)} вЂ” referral bonus ${pct}%</blockquote>`;
+    ? `<blockquote>+${rub(reward)} — реферальное вознаграждение ${pct}%</blockquote>`
+    : `<blockquote>+${rub(reward)} — referral bonus ${pct}%</blockquote>`;
   tg("sendMessage",{chat_id:r.tg_id,text:msg,parse_mode:"HTML"}).catch(()=>{});
 }
 
-// Withdrawal system removed вЂ” ref rewards go directly to main balance
+// Withdrawal system removed — ref rewards go directly to main balance
 
-// в”Ђв”Ђ FK auto-expire job (1 h) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── FK auto-expire job (1 h) ──────────────────────────────────────────────────
 // Runs every 5 minutes and expires any pending FK payment that is over 1 hour
 // old. The linked pending purchase order (if any) is also closed so the user
 // can start a fresh payment attempt.
@@ -672,8 +658,8 @@ function startFkExpireJob() {
         tg("sendMessage", {
           chat_id: fp.tg_id,
           text: isRu
-            ? `вЏ° <b>РЎС‡С‘С‚ РёСЃС‚С‘Рє</b>\n\nР—Р°СЏРІРєР° РЅР° РїРѕРїРѕР»РЅРµРЅРёРµ <b>${rub(fp.amount_rub)}</b>Р±С‹Р»Р° Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РѕС‚РјРµРЅРµРЅР° вЂ” РѕРїР»Р°С‚Р° РЅРµ РїРѕСЃС‚СѓРїРёР»Р° РІ С‚РµС‡РµРЅРёРµ 1 С‡Р°СЃР°.\n\nР•СЃР»Рё РІС‹ РѕРїР»Р°С‚РёР»Рё вЂ” РѕР±СЂР°С‚РёС‚РµСЃСЊ РІ РїРѕРґРґРµСЂР¶РєСѓ.`
-            : `вЏ° <b>Invoice expired</b>\n\ninvoice for <b>${rub(fp.amount_rub)}</b> was automatically cancelled вЂ” no payment received within 1 hour.\n\nIf you already paid, please contact support.`,
+            ? `⏰ <b>Счёт истёк</b>\n\nЗаявка на пополнение <b>${rub(fp.amount_rub)}</b>была автоматически отменена — оплата не поступила в течение 1 часа.\n\nЕсли вы оплатили — обратитесь в поддержку.`
+            : `⏰ <b>Invoice expired</b>\n\ninvoice for <b>${rub(fp.amount_rub)}</b> was automatically cancelled — no payment received within 1 hour.\n\nIf you already paid, please contact support.`,
           parse_mode: "HTML",
           reply_markup: { inline_keyboard: [[{ text: tx.btn_topup, callback_data: "v:topup" }]] },
         }).catch(() => {});
@@ -685,7 +671,7 @@ function startFkExpireJob() {
   setInterval(checkExpireFk, CHECK_INTERVAL);
 }
 
-// в”Ђв”Ђ Expiry notification job в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Expiry notification job ───────────────────────────────────────────────────
 function startExpiryNotificationJob() {
   const CHECK_INTERVAL = 60 * 60 * 1000; // every hour
   async function checkExpiry() {
@@ -735,14 +721,14 @@ function startExpiryNotificationJob() {
   setInterval(checkExpiry, CHECK_INTERVAL);
 }
 
-// в”Ђв”Ђ Admin: grant subscription directly в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Admin: grant subscription directly ───────────────────────────────────────
 async function adminGrantSub(adminId, targetId, tariffCode, chatId, msgId) {
   const tr = tariff(tariffCode);
   const tu = user(targetId);
   if (!tr || !tu) return;
   const api = await createSubViaApi(tu, tr, false);
   const subUrl = api.subscriptionUrl || api.sub_url || "";
-  if (!subUrl) throw new Error("API РЅРµ РІРµСЂРЅСѓР» СЃСЃС‹Р»РєСѓ");
+  if (!subUrl) throw new Error("API не вернул ссылку");
   const exp = now() + tr.duration_days * 86400000;
   db.transaction(()=>{
     db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,devices,created_at,updated_at) VALUES(?,?,?,?,?,1,3,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,devices=excluded.devices,updated_at=excluded.updated_at")
@@ -768,11 +754,11 @@ function setUserState(id,state,payload="")  { db.prepare("INSERT INTO user_state
 function getUserState(id)                   { return db.prepare("SELECT * FROM user_states WHERE tg_id=?").get(Number(id)); }
 function clearUserState(id)                 { db.prepare("DELETE FROM user_states WHERE tg_id=?").run(Number(id)); }
 
-// в”Ђв”Ђ Prompt helpers (no reply keyboard вЂ” fully inline) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-// Sends a prompt message with an inline вќЊ РћС‚РјРµРЅР° button.
+// ── Prompt helpers (no reply keyboard — fully inline) ─────────────────────────
+// Sends a prompt message with an inline ❌ Отмена button.
 // Returns the sent message id so callers can delete/edit it later.
 async function sendPrompt(chatId, text, cancelCb="cancel:input", extraButtons=[]) {
-  const rows = [...extraButtons, [{text:"вќЊ РћС‚РјРµРЅР°", callback_data:cancelCb}]];
+  const rows = [...extraButtons, [{text:"❌ Отмена", callback_data:cancelCb}]];
   const m = await tg("sendMessage",{
     chat_id: chatId, text, parse_mode:"HTML",
     reply_markup:{inline_keyboard: rows},
@@ -780,15 +766,15 @@ async function sendPrompt(chatId, text, cancelCb="cancel:input", extraButtons=[]
   return Number(m?.message_id||0);
 }
 
-// Delete a message silently (ignore errors вЂ” message may already be gone)
+// Delete a message silently (ignore errors — message may already be gone)
 function delMsg(chatId, msgId) {
   if(!chatId||!msgId) return;
   tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // DB init + migrations
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function init() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users(
@@ -894,7 +880,7 @@ function init() {
     );
   `);
 
-  // Migrations вЂ” idempotent
+  // Migrations — idempotent
   for (const m of [
     "ALTER TABLE users ADD COLUMN ref_balance_rub INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN ref_earned INTEGER NOT NULL DEFAULT 0",
@@ -902,7 +888,7 @@ function init() {
     "ALTER TABLE users ADD COLUMN trial_used INTEGER NOT NULL DEFAULT 0",
   ]) { try { db.exec(m); } catch {} }
 
-  // New-tables migration вЂ” create them separately so existing DBs get them
+  // New-tables migration — create them separately so existing DBs get them
   // even if the main db.exec block ran without these tables before.
   for (const sql of [
     `CREATE TABLE IF NOT EXISTS pending_orders(
@@ -951,7 +937,7 @@ function init() {
 
   // Seed new settings into existing DBs (ON CONFLICT DO NOTHING keeps existing values)
   const ssNew = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING");
-  ssNew.run("guide_text_en", "рџ“‹ <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from В«My SubscriptionВ» and paste it into the app.\n3. All done вЂ” your internet now routes through our server.\n\nрџ’¬ Questions? Contact [support|https://t.me/dreinnvpnsupportbot]");
+  ssNew.run("guide_text_en", "📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/dreinnvpnsupportbot]");
   ssNew.run("channel_id", "");
   ssNew.run("channel_invite_url", "");
   ssNew.run("trial_enabled", "1");
@@ -964,15 +950,15 @@ function init() {
 
   // Seed tariffs
   const st = db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(code) DO NOTHING");
-  [["m1","1 РјРµСЃСЏС†",30,100,1],["m6","6 РјРµСЃСЏС†РµРІ",180,600,2],["y1","1 РіРѕРґ",365,900,3]].forEach(r=>st.run(...r));
+  [["m1","1 месяц",30,100,1],["m6","6 месяцев",180,600,2],["y1","1 год",365,900,3]].forEach(r=>st.run(...r));
 
   // Seed settings
   const ss = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING");
   const defaults = [
     ["payment_methods",""],["gif_main_menu",""],["gif_purchase_success",""],["gif_gift_success",""],["gif_broadcast",""],
     ["ref_percent","30"],
-    ["guide_text","рџ“‹ <b>РРЅСЃС‚СЂСѓРєС†РёСЏ РїРѕ РїРѕРґРєР»СЋС‡РµРЅРёСЋ:</b>\n\n1. РЎРєР°С‡Р°Р№С‚Рµ [Happ|https://www.happ.su/main/ru] РёР»Рё [v2RayTun|https://v2raytun.com/].\n2. РЎРєРѕРїРёСЂСѓР№С‚Рµ РІР°С€ РєР»СЋС‡ РґРѕСЃС‚СѓРїР° РёР· СЂР°Р·РґРµР»Р° В«РњРѕСЏ РїРѕРґРїРёСЃРєР°В» Рё РІСЃС‚Р°РІСЊС‚Рµ РµРіРѕ РІ РїСЂРёР»РѕР¶РµРЅРёРµ.\n3. Р’СЃС‘ РіРѕС‚РѕРІРѕ вЂ” РёРЅС‚РµСЂРЅРµС‚ СЂР°Р±РѕС‚Р°РµС‚ С‡РµСЂРµР· РЅР°С€ СЃРµСЂРІРµСЂ.\n\nрџ’¬ Р•СЃР»Рё РІРѕР·РЅРёРєРЅСѓС‚ РІРѕРїСЂРѕСЃС‹ вЂ” РѕР±СЂР°С‰Р°Р№С‚РµСЃСЊ РІ [РїРѕРґРґРµСЂР¶РєСѓ|https://t.me/dreinnvpnsupportbot]"],
-    ["guide_text_en","рџ“‹ <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from В«My SubscriptionВ» and paste it into the app.\n3. All done вЂ” your internet now routes through our server.\n\nрџ’¬ Questions? Contact [support|https://t.me/dreinnvpnsupportbot]"],
+    ["guide_text","📋 <b>Инструкция по подключению:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru] или [v2RayTun|https://v2raytun.com/].\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в приложение.\n3. Всё готово — интернет работает через наш сервер.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/dreinnvpnsupportbot]"],
+    ["guide_text_en","📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/dreinnvpnsupportbot]"],
     // Per-section images (empty = no image)
     ["img_home",""],["img_sub",""],["img_buy",""],["img_bal",""],["img_ref",""],
     ["img_gift",""],["img_guide",""],["img_about",""],["img_topup",""],
@@ -1001,9 +987,9 @@ function init() {
   try { db.exec("ALTER TABLE freekassa_payments ADD COLUMN pending_order_id INTEGER"); } catch {}
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Telegram API
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function tg(method, params, _retry=0) {
   const isLongPoll = method === "getUpdates";
   const timeoutMs  = isLongPoll ? 45000 : 30000; // long-poll needs > 30s
@@ -1037,7 +1023,7 @@ async function tgSendFile(method, chatId, fieldName, filePath, extra={}) {
 }
 
 /**
- * Send a photo from an in-memory Buffer (multipart upload вЂ” avoids Telegram
+ * Send a photo from an in-memory Buffer (multipart upload — avoids Telegram
  * trying to fetch remote URLs which can fail for long QR URLs).
  */
 async function sendPhotoBuffer(chatId, buffer, mimeType, caption, replyMarkup) {
@@ -1056,7 +1042,7 @@ async function sendPhotoBuffer(chatId, buffer, mimeType, caption, replyMarkup) {
  * Smart send/edit function supporting both photo and text messages.
  * If photo is provided:  sendPhoto (caption) or editMessageMedia
  * If no photo:           sendMessage / editMessageText
- * Gracefully handles mismatches (photoв†’text, textв†’photo) by deleting and resending.
+ * Gracefully handles mismatches (photo→text, text→photo) by deleting and resending.
  */
 async function renderMsg(chatId, msgId, text, kb, photo=null) {
   if (photo) {
@@ -1069,7 +1055,7 @@ async function renderMsg(chatId, msgId, text, kb, photo=null) {
         });
         return Number(msgId);
       } catch(e) {
-        // Was a text message or error вЂ” delete it and send fresh photo
+        // Was a text message or error — delete it and send fresh photo
         await tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
       }
     }
@@ -1082,7 +1068,7 @@ async function renderMsg(chatId, msgId, text, kb, photo=null) {
         return Number(msgId);
       } catch(e) {
         if (String(e.message).includes("message is not modified")) return Number(msgId);
-        // Was a photo message вЂ” delete it
+        // Was a photo message — delete it
         await tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
       }
     }
@@ -1095,9 +1081,9 @@ async function gif(chatId, key) {
   const g = setting(key,""); if(g) await tg("sendAnimation",{chat_id:chatId,animation:g}).catch(()=>{});
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // CryptoBot API
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 let _rateCache = { val: USDT_FALLBACK, ts: 0 };
 
 async function getUsdtRate() {
@@ -1132,7 +1118,7 @@ async function createCryptoInvoice(amountRub) {
     const r = await fetch(CRYPTOBOT_API + "/createInvoice", {
       method:"POST",
       headers:{"Crypto-Pay-API-Token":CRYPTOBOT_TOKEN,"Content-Type":"application/json"},
-      body:JSON.stringify({asset:"USDT",amount:String(amountUsdt),description:`РџРѕРїРѕР»РЅРµРЅРёРµ ${amountRub} в‚Ѕ`,expires_in:CRYPTO_INVOICE_TTL}),
+      body:JSON.stringify({asset:"USDT",amount:String(amountUsdt),description:`Пополнение ${amountRub} ₽`,expires_in:CRYPTO_INVOICE_TTL}),
       signal:AbortSignal.timeout(12000),
     });
     const d = await r.json().catch(()=>({}));
@@ -1183,7 +1169,7 @@ async function handleCryptoBotWebhookPayload(body) {
         reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]},
       }).catch(()=>{});
     }
-    tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Crypto РїРѕРїРѕР»РЅРµРЅРёРµ (webhook)</b>`,"",`${esc(me?.first_name||String(cp.tg_id))} (<code>${cp.tg_id}</code>)`,`РЎСѓРјРјР°: <b>${rub(cp.amount_rub)}</b>  (${cp.amount_usdt} USDT @ ${Number(cp.rate_rub).toFixed(2)} в‚Ѕ)`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
+    tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Crypto пополнение (webhook)</b>`,"",`${esc(me?.first_name||String(cp.tg_id))} (<code>${cp.tg_id}</code>)`,`Сумма: <b>${rub(cp.amount_rub)}</b>  (${cp.amount_usdt} USDT @ ${Number(cp.rate_rub).toFixed(2)} ₽)`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
   } catch(e) { console.error("[CryptoBot webhook]", e.message); }
 }
 
@@ -1210,7 +1196,7 @@ function expireOldPendingOrders() {
     .run(now(), now());
 }
 
-// в”Ђв”Ђ Pending orders (direct payment flow) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Pending orders (direct payment flow) ─────────────────────────────────────
 function createPendingOrder(tgId, tariffCode, kind="new", promoCd="", promoPct=0, devices=3) {
   expireOldPendingOrders();
   const expires = now() + 30 * 60 * 1000; // 30 min TTL
@@ -1234,7 +1220,7 @@ function closePendingOrder(id, status="done") {
   db.prepare("UPDATE pending_orders SET status=?,updated_at=? WHERE id=?").run(status,now(),Number(id));
 }
 
-// в”Ђв”Ђ Promo codes в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Promo codes ───────────────────────────────────────────────────────────────
 function getPromo(code)    { return db.prepare("SELECT * FROM promo_codes WHERE code=? COLLATE NOCASE").get(String(code||"").trim()); }
 function hasUsedPromo(tgId, code) { return !!db.prepare("SELECT 1 FROM promo_uses WHERE tg_id=? AND promo_code=? COLLATE NOCASE").get(Number(tgId),String(code)); }
 function usePromo(tgId, code) {
@@ -1282,7 +1268,7 @@ function fkSignPayload(payload) {
   return crypto.createHmac("sha256", FK_API_KEY).update(joined).digest("hex");
 }
 function methodTitle(i, lang) {
-  const ru = { 44: "РЎР‘Рџ (QR)", 36: "Р‘Р°РЅРєРѕРІСЃРєР°СЏ РєР°СЂС‚Р° Р Р¤", 43: "SberPay" };
+  const ru = { 44: "СБП (QR)", 36: "Банковская карта РФ", 43: "SberPay" };
   const en = { 44: "SBP (QR)", 36: "Russian bank card", 43: "SberPay" };
   return (lang === "en" ? en : ru)[Number(i)] || `i=${i}`;
 }
@@ -1451,11 +1437,11 @@ async function creditFkPaymentByPaymentId(paymentId, fkOrderId = null, paidAmoun
   tg("sendMessage", {
     chat_id: ADMIN_ID,
     text: [
-      "<b>FreeKassa РїРѕРїРѕР»РЅРµРЅРёРµ</b>",
+      "<b>FreeKassa пополнение</b>",
       "",
       `${esc(me?.first_name || String(fp.tg_id))} (<code>${fp.tg_id}</code>)`,
-      `РЎСѓРјРјР°: <b>${rub(fp.amount_rub)}</b>`,
-      `РњРµС‚РѕРґ: <b>${esc(methodTitle(fp.method_id, "ru"))}</b>`,
+      `Сумма: <b>${rub(fp.amount_rub)}</b>`,
+      `Метод: <b>${esc(methodTitle(fp.method_id, "ru"))}</b>`,
       `paymentId: <code>${esc(fp.payment_id)}</code>`,
       ...(fkOrderId ? [`fk_order_id: <code>${fkOrderId}</code>`] : []),
     ].join("\n"),
@@ -1464,17 +1450,17 @@ async function creditFkPaymentByPaymentId(paymentId, fkOrderId = null, paidAmoun
   return { ok: true, reason: "PAID", fp };
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // DB Import / Export / Restart
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function downloadImportFile(fileId) {
   const f = await tg("getFile",{file_id:fileId});
   if(!f?.file_path) throw new Error("file_path not found");
   const resp = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${f.file_path}`);
-  if(!resp.ok) throw new Error(`РћС€РёР±РєР° СЃРєР°С‡РёРІР°РЅРёСЏ: HTTP ${resp.status}`);
+  if(!resp.ok) throw new Error(`Ошибка скачивания: HTTP ${resp.status}`);
   const buf = Buffer.from(await resp.arrayBuffer());
   if(buf.length<100||buf.slice(0,16).toString("binary")!=="SQLite format 3\x00")
-    throw new Error("Р¤Р°Р№Р» РЅРµ СЏРІР»СЏРµС‚СЃСЏ SQLite Р±Р°Р·РѕР№ РґР°РЅРЅС‹С…");
+    throw new Error("Файл не является SQLite базой данных");
   const tmp=`${DB_FILE}.import_${Date.now()}.tmp`;
   await fsp.writeFile(tmp,buf);
   return tmp;
@@ -1498,12 +1484,12 @@ function restartBot() {
 
 async function exportDbToAdmin(chatId) {
   try{db.pragma("wal_checkpoint(TRUNCATE)");}catch{}
-  await tgSendFile("sendDocument",chatId,"document",DB_FILE,{caption:"рџ“¦ Р‘Р°Р·Р° РґР°РЅРЅС‹С…"});
+  await tgSendFile("sendDocument",chatId,"document",DB_FILE,{caption:"📦 База данных"});
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // User helpers
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function upsertUser(from, chatId) {
   const cur = user(from.id);
   const ref = cur?.ref_code || crypto.randomBytes(5).toString("hex");
@@ -1516,12 +1502,12 @@ function setMenu(uid,chatId,mid){ db.prepare("UPDATE users SET last_chat_id=?,la
 function findRef(code)          { return db.prepare("SELECT * FROM users WHERE ref_code=?").get(String(code||"").trim()); }
 function setRef(uid,rid)        { const u=user(uid); if(!u||u.referred_by||Number(uid)===Number(rid)) return; db.prepare("UPDATE users SET referred_by=?,updated_at=? WHERE tg_id=?").run(Number(rid),now(),Number(uid)); }
 
-// в”Ђв”Ђ Channel gate helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Channel gate helpers ──────────────────────────────────────────────────────
 function getChannelId() { return setting("channel_id","").trim(); }
 
 async function checkChannelMembership(userId) {
   const chanId = getChannelId();
-  if (!chanId) return true; // no channel configured в†’ always pass
+  if (!chanId) return true; // no channel configured → always pass
   try {
     const m = await tg("getChatMember", { chat_id: chanId, user_id: Number(userId) });
     return ["member","administrator","creator"].includes(m?.status);
@@ -1534,16 +1520,16 @@ function getChannelUrl() {
   const id = getChannelId();
   if (!id) return "";
   if (id.startsWith("@")) return `https://t.me/${id.slice(1)}`;
-  return ""; // numeric id without invite link вЂ” admin must set channel_invite_url
+  return ""; // numeric id without invite link — admin must set channel_invite_url
 }
 
-// в”Ђв”Ђ Trial helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Trial helpers ─────────────────────────────────────────────────────────────
 function trialEnabled() { return setting("trial_enabled","1")==="1"; }
 function trialDays()    { return Math.max(1,Math.min(365,Number(setting("trial_days","7"))||7)); }
 function hasUsedTrial(uid) { return !!(db.prepare("SELECT trial_used FROM users WHERE tg_id=?").get(Number(uid))?.trial_used); }
 function markTrialUsed(uid) { db.prepare("UPDATE users SET trial_used=1,updated_at=? WHERE tg_id=?").run(now(),Number(uid)); }
 
-// в”Ђв”Ђ Channel gate: sends subscription prompt and returns false if blocked в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Channel gate: sends subscription prompt and returns false if blocked ───────
 async function enforceChannelGate(uid, chatId, lang) {
   if (!getChannelId()) return true;           // no channel configured
   const member = await checkChannelMembership(uid);
@@ -1551,7 +1537,7 @@ async function enforceChannelGate(uid, chatId, lang) {
   const tx = I18N[lang] || I18N.ru;
   const chanUrl = getChannelUrl();
   const rows = [];
-  if (chanUrl) rows.push([{text:"рџ“ў РџРѕРґРїРёСЃР°С‚СЊСЃСЏ / Subscribe",url:chanUrl}]);
+  if (chanUrl) rows.push([{text:"📢 Подписаться / Subscribe",url:chanUrl}]);
   rows.push([{text:tx.btn_check_sub,callback_data:"gate:check"}]);
   await tg("sendMessage",{
     chat_id:chatId,
@@ -1562,7 +1548,7 @@ async function enforceChannelGate(uid, chatId, lang) {
   return false;
 }
 
-// в”Ђв”Ђ Trial purchase execution в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Trial purchase execution ───────────────────────────────────────────────────
 async function doTrial(uid, chatId, msgId) {
   const tx = T(uid);
   if (hasUsedTrial(uid)) { await tg("answerCallbackQuery",{callback_query_id:"",text:tx.trial_used_msg,show_alert:true}).catch(()=>{}); return; }
@@ -1570,10 +1556,10 @@ async function doTrial(uid, chatId, msgId) {
   const days = trialDays();
   // Create subscription via API (zero cost, duration = trial days)
   const u = user(uid);
-  const fakeTariff = {code:"trial",title:getLang(uid)==="en"?`Free Trial (${days}d)`:`РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ (${days} РґРЅ.)`,duration_days:days,price_rub:0};
+  const fakeTariff = {code:"trial",title:getLang(uid)==="en"?`Free Trial (${days}d)`:`Пробный период (${days} дн.)`,duration_days:days,price_rub:0};
   const api = await createSubViaApi(u, fakeTariff, false);
   const subUrl = api.subscriptionUrl || api.sub_url || "";
-  if (!subUrl) { await tg("sendMessage",{chat_id:chatId,text:"вќЊ РћС€РёР±РєР° API. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ."}); return; }
+  if (!subUrl) { await tg("sendMessage",{chat_id:chatId,text:"❌ Ошибка API. Попробуйте позже."}); return; }
   const exp = now() + days * 86400000;
   db.transaction(()=>{
     db.prepare("INSERT INTO subscriptions(tg_id,plan_code,plan_title,sub_url,expires_at,is_active,devices,created_at,updated_at) VALUES(?,?,?,?,?,1,1,?,?) ON CONFLICT(tg_id) DO UPDATE SET plan_code=excluded.plan_code,plan_title=excluded.plan_title,sub_url=excluded.sub_url,expires_at=excluded.expires_at,is_active=1,devices=1,updated_at=excluded.updated_at")
@@ -1585,7 +1571,7 @@ async function doTrial(uid, chatId, msgId) {
   const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
   setMenu(uid,chatId,nm);
 }
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function createSubViaApi(target, tr, giftMode, devices=3) {
   const ctrl = new AbortController();
   const tid  = setTimeout(()=>ctrl.abort(), 20000);
@@ -1593,21 +1579,21 @@ async function createSubViaApi(target, tr, giftMode, devices=3) {
     const r = await fetch(`${API}/api/bot-subscription`,{
       method:"POST",
       headers:{"Content-Type":"application/json","x-app-secret":APP_SECRET},
-      body:JSON.stringify({telegramUserId:String(target.tg_id),telegramUsername:target.username||"",firstName:target.first_name||"",durationDays:tr.duration_days,name:`VPN ${tr.title}`,description:giftMode?`РџРѕРґР°СЂРѕРє: ${tr.title}`:`РўР°СЂРёС„: ${tr.title}`,devices:Number(devices)||3}),
+      body:JSON.stringify({telegramUserId:String(target.tg_id),telegramUsername:target.username||"",firstName:target.first_name||"",durationDays:tr.duration_days,name:`VPN ${tr.title}`,description:giftMode?`Подарок: ${tr.title}`:`Тариф: ${tr.title}`,devices:Number(devices)||3}),
       signal:ctrl.signal,
     });
     const j = await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.error||`API HTTP ${r.status}`);
     return j;
   } catch(e) {
-    if(e.name==="AbortError") throw new Error("API timeout вЂ” СЃРµСЂРІРµСЂ РЅРµ РѕС‚РІРµС‚РёР»");
+    if(e.name==="AbortError") throw new Error("API timeout — сервер не ответил");
     throw e;
   } finally {
     clearTimeout(tid);
   }
 }
 
-// Called after balance credited вЂ” auto-complete pending order if user has enough balance
+// Called after balance credited — auto-complete pending order if user has enough balance
 async function completePurchaseAfterTopup(tgId, po) {
   const u = user(tgId);
   const tr = tariff(po.tariff_code);
@@ -1627,7 +1613,7 @@ async function completePurchaseAfterTopup(tgId, po) {
     await tg("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_connect,url:s?.sub_url||""}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
   } catch(e) {
     const tx = T(tgId);
-    tg("sendMessage",{chat_id:chatId,text:`вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РѕС„РѕСЂРјРёС‚СЊ РїРѕРґРїРёСЃРєСѓ: ${e.message}`}).catch(()=>{});
+    tg("sendMessage",{chat_id:chatId,text:`❌ Не удалось оформить подписку: ${e.message}`}).catch(()=>{});
   }
 }
 
@@ -1649,7 +1635,7 @@ async function doPurchaseWithPromo(payerId, receiverId, code, kind, promoCd, pro
 
   const api    = await createSubViaApi(receiver,tr,kind==="gift",devCount);
   const subUrl = api.subscriptionUrl || api.sub_url || "";
-  if(!subUrl) throw new Error("API РЅРµ РІРµСЂРЅСѓР» СЃСЃС‹Р»РєСѓ РїРѕРґРїРёСЃРєРё");
+  if(!subUrl) throw new Error("API не вернул ссылку подписки");
 
   let newExpiresAt;
   if (kind==="renew") {
@@ -1686,9 +1672,9 @@ async function buySelf(uid, chatId, msgId, code, mode, cbid, promoCd="", promoPc
     const kb={inline_keyboard:[[{text:tx.btn_connect,url:res.url}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]};
     const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
     setMenu(uid,chatId,nm);
-    await tg("answerCallbackQuery",{callback_query_id:cbid,text:"вњ…"});
+    await tg("answerCallbackQuery",{callback_query_id:cbid,text:"✅"});
   } catch(e) {
-    const map={ACTIVE:getLang(uid)==="en"?"Already active. Choose Renew.":"РџРѕРґРїРёСЃРєР° СѓР¶Рµ Р°РєС‚РёРІРЅР°.",NO_ACTIVE:getLang(uid)==="en"?"No active sub to renew.":"РќРµС‚ Р°РєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРё РґР»СЏ РїСЂРѕРґР»РµРЅРёСЏ.",NO_MONEY:getLang(uid)==="en"?"Insufficient balance.":"РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЃСЂРµРґСЃС‚РІ."};
+    const map={ACTIVE:getLang(uid)==="en"?"Already active. Choose Renew.":"Подписка уже активна.",NO_ACTIVE:getLang(uid)==="en"?"No active sub to renew.":"Нет активной подписки для продления.",NO_MONEY:getLang(uid)==="en"?"Insufficient balance.":"Недостаточно средств."};
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:map[e.message]||e.message,show_alert:true});
     if(e.message==="NO_MONEY") {
       // Show direct payment options instead of just redirecting to topup
@@ -1719,7 +1705,7 @@ async function showDirectPayment(uid, chatId, msgId, code, mode, promoCd="", pro
   const lines=[
     tx.direct_no_bal(rub(finalPrice), rub(u.balance_rub)),
     "",
-    `<b>${planName}</b> вЂ” <b>${rub(finalPrice)}</b>`,
+    `<b>${planName}</b> — <b>${rub(finalPrice)}</b>`,
     ...(surcharge?[tx.dev_surcharge(surcharge)]:[]),
     ...(promoPct?[tx.promo_applied(promoPct)]:[]),
   ];
@@ -1727,7 +1713,7 @@ async function showDirectPayment(uid, chatId, msgId, code, mode, promoCd="", pro
   setMenu(uid,chatId,nm);
 }
 
-// в”Ђв”Ђ Device selector в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Device selector ───────────────────────────────────────────────────────────
 async function showDeviceSelector(uid, chatId, msgId, code, mode, selectedDevices=3) {
   const tr=tariff(code); if(!tr) return;
   const tx=T(uid), lang=getLang(uid);
@@ -1743,7 +1729,7 @@ async function showDeviceSelector(uid, chatId, msgId, code, mode, selectedDevice
     for(const d of [i,i+1]){
       if(d>10) break;
       const isSelected=d===devCount;
-      row.push({text:`${d} СѓСЃС‚СЂ.${isSelected?" вњ…":""}`,callback_data:`dev:${code}:${mode}:${d}`});
+      row.push({text:`${d} устр.${isSelected?" ✅":""}`,callback_data:`dev:${code}:${mode}:${d}`});
     }
     devRows.push(row);
   }
@@ -1765,7 +1751,7 @@ async function showDeviceSelector(uid, chatId, msgId, code, mode, selectedDevice
 }
 
 async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid, promoCd="", promoPct=0, devices=3) {
-  const tr=tariff(code); if(!tr){if(cbid)await tg("answerCallbackQuery",{callback_query_id:cbid,text:"РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ",show_alert:true});return;}
+  const tr=tariff(code); if(!tr){if(cbid)await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
   const u=user(uid), tx=T(uid), lang=getLang(uid);
   const devCount=Math.max(1,Math.min(10,Number(devices)||3));
   const finalPrice = calcPriceWithDevices(tr.price_rub, promoPct, devCount);
@@ -1774,8 +1760,8 @@ async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid, promoCd="", p
   const trialActive=isTrialSub(uid);
   const extendNote = trialActive
     ? (lang==="en"
-        ? `<i>вљ пёЏ Your free trial will be replaced. New expiry: ${dt(now() + tr.duration_days*86400000,lang)}</i>`
-        : `<i>вљ пёЏ РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ Р±СѓРґРµС‚ Р·Р°РјРµРЅС‘РЅ. РќРѕРІС‹Р№ СЃСЂРѕРє: ${dt(now() + tr.duration_days*86400000,lang)}</i>`)
+        ? `<i>⚠️ Your free trial will be replaced. New expiry: ${dt(now() + tr.duration_days*86400000,lang)}</i>`
+        : `<i>⚠️ Пробный период будет заменён. Новый срок: ${dt(now() + tr.duration_days*86400000,lang)}</i>`)
     : null;
   const lines=[
     tx.confirm_title(mode),"",
@@ -1788,17 +1774,17 @@ async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid, promoCd="", p
     ...(extendNote ? [extendNote,""] : []),
     diff<0?tx.confirm_low:tx.confirm_ok,
   ];
-  // Promo code button вЂ” shown in both branches (with/without balance)
+  // Promo code button — shown in both branches (with/without balance)
   const hasUsedAnyPromo = !!db.prepare("SELECT 1 FROM promo_uses WHERE tg_id=?").get(Number(uid));
   const promoBtn = promoCd
-    ? [{text:`рџЋџ ${promoCd} (${promoPct}%)`, callback_data:"noop"}]
+    ? [{text:`🎟 ${promoCd} (${promoPct}%)`, callback_data:"noop"}]
     : hasUsedAnyPromo
-      ? [] // user already used a promo code ever вЂ” hide button
+      ? [] // user already used a promo code ever — hide button
       : [{text:tx.btn_promo, callback_data:`promo:ask:${code}:${mode}:${devCount}`}];
 
   let kb;
   if(diff<0){
-    // Not enough balance вЂ” show promo button FIRST, then payment options
+    // Not enough balance — show promo button FIRST, then payment options
     const poId = createPendingOrder(uid, code, mode, promoCd, promoPct, devCount);
     const payRows=[];
     if(promoBtn.length) payRows.push(promoBtn); // promo at the top
@@ -1829,14 +1815,14 @@ async function askGiftConfirm(uid, chatId, msgId, code, toId, cbid) {
     : tg("sendMessage",{chat_id:chatId,text,parse_mode:"HTML"}).catch(()=>{});
   if(Number(uid)===Number(toId)){await cbAns(T(uid).gift_self);return;}
   const tr=tariff(code), to=user(toId), u=user(uid), tx=T(uid);
-  if(!tr){await cbAns("РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ");return;}
-  if(!to){await cbAns("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ");return;}
+  if(!tr){await cbAns("Тариф не найден");return;}
+  if(!to){await cbAns("Пользователь не найден");return;}
   // Block gift if recipient already has an active subscription
   const toSub=sub(toId);
   if(activeSub(toSub)){
     const msg=getLang(uid)==="en"
-      ? "вќЊ Recipient already has an active subscription."
-      : "вќЊ РЈ РїРѕР»СѓС‡Р°С‚РµР»СЏ СѓР¶Рµ РµСЃС‚СЊ Р°РєС‚РёРІРЅР°СЏ РїРѕРґРїРёСЃРєР°.";
+      ? "❌ Recipient already has an active subscription."
+      : "❌ У получателя уже есть активная подписка.";
     await cbAns(msg); return;
   }
   if(Number(u.balance_rub)<Number(tr.price_rub)){await cbAns(tx.gift_no_bal(tr.price_rub,u.balance_rub));return;}
@@ -1870,32 +1856,34 @@ async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
       const rtx=T(to.tg_id);
       tg("sendMessage",{chat_id:to.tg_id,text:[rtx.gift_rcvd,"",rtx.gift_plan(res.tr.title),`${rtx.sub_exp(dt(res.exp,getLang(to.tg_id)))}`,`\n<code>${esc(res.url)}</code>`].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,web_app:{url:res.url}}]]}}).catch(()=>{});
     }
-    if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"рџЋЃ"});
+    if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"🎁"});
   } catch(e) {
     const tx=T(fromId);
     const map={
-      NO_MONEY: getLang(fromId)==="en" ? "Insufficient balance." : "РќРµРґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СЃСЂРµРґСЃС‚РІ.",
-      ACTIVE:   getLang(fromId)==="en" ? "Recipient already has an active subscription." : "РЈ РїРѕР»СѓС‡Р°С‚РµР»СЏ СѓР¶Рµ РµСЃС‚СЊ Р°РєС‚РёРІРЅР°СЏ РїРѕРґРїРёСЃРєР°.",
+      NO_MONEY: getLang(fromId)==="en" ? "Insufficient balance." : "Недостаточно средств.",
+      ACTIVE:   getLang(fromId)==="en" ? "Recipient already has an active subscription." : "У получателя уже есть активная подписка.",
     };
     if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:map[e.message]||e.message,show_alert:true});
     if(msgId) await render(fromId,chatId,msgId,"home");
   }
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Keyboard builders
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function homeKb(uid) {
-  const tx=T(uid), s=sub(uid), act=activeSub(s);
-  const rows=[];
-  rows.push([{text: act ? tx.btn_sub_active : tx.btn_buy, callback_data: act?"v:sub":"v:buy"}]);
-  rows.push([{text:tx.btn_profile,callback_data:"v:profile"},{text:tx.btn_ref,callback_data:"v:ref"}]);
-  rows.push([{text:tx.btn_other_gift,callback_data:"v:gift"},{text:tx.btn_guide,callback_data:"v:guide"}]);
-  const miscRow=[];
-  if(lnk.support()) miscRow.push({text:tx.btn_support,url:lnk.support()});
-  miscRow.push({text:tx.btn_about,callback_data:"v:about"});
-  rows.push(miscRow);
-  if(isAdmin(uid)) rows.push([{text:"🚀 Панель администратора",callback_data:"a:main"}]);
+  const tx=T(uid), s=sub(uid), act=activeSub(s), isRu=getLang(uid)==="ru";
+  const rows=[
+    [{text: act ? (isRu?"⚡ VPN":"⚡ VPN") : tx.btn_buy, callback_data: act?"v:sub":"v:buy"},
+     {text:tx.btn_other_gift,callback_data:"v:gift"}],
+    [{text:tx.btn_ref,callback_data:"v:ref"},
+     {text:tx.btn_about,callback_data:"v:about"}],
+    [{text:tx.btn_profile,callback_data:"v:profile"},
+     {text:tx.btn_other_topup,callback_data:"v:topup"}],
+  ];
+  if(lnk.support()) rows.push([{text:tx.btn_support,url:lnk.support()},{text:tx.btn_guide,callback_data:"v:guide"}]);
+  else rows.push([{text:tx.btn_guide,callback_data:"v:guide"}]);
+  if(isAdmin(uid)) rows.push([{text:"🛠 Панель администратора",callback_data:"a:main"}]);
   return{inline_keyboard:rows};
 }
 
@@ -1928,7 +1916,7 @@ function buyKb(uid) {
   // Trial button at top if available
   if(trialEnabled()&&!hasUsedTrial(uid)&&!act){
     const days=trialDays();
-    const label=lang==="en"?`рџЋЃ Free trial (${days} days)`:`рџЋЃ РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ (${days} РґРЅРµР№)`;
+    const label=lang==="en"?`🎁 Free trial (${days} days)`:`🎁 Пробный период (${days} дней)`;
     rows.push([{text:label,callback_data:"trial:start"}]);
   }
   // Tariff buttons in 2-column grid
@@ -1962,14 +1950,14 @@ function refKb(uid) {
   const tx=T(uid), u=user(uid);
   const link=refLink(u.ref_code);
   // t.me/share/url requires ?url= (mandatory), &text= is prepended before the URL by Telegram.
-  // Result in chat: "РџСЂРёРІРµС‚. РџРѕРґРєР»СЋС‡РёСЃСЊ Рє VPN РїРѕ РјРѕРµР№ СЃСЃС‹Р»РєРµ:\nhttps://t.me/bot?start=partner_xxx\nР Р°Р±РѕС‚Р°РµС‚ Р±С‹СЃС‚СЂРѕ Рё СЃС‚Р°Р±РёР»СЊРЅРѕ."
+  // Result in chat: "Привет. Подключись к VPN по моей ссылке:\nhttps://t.me/bot?start=partner_xxx\nРаботает быстро и стабильно."
   const isRu=getLang(uid)==="ru";
   const shareText=isRu
-    ? "РџСЂРёРІРµС‚. РџРѕРґРєР»СЋС‡РёСЃСЊ Рє VPN РїРѕ РјРѕРµР№ СЃСЃС‹Р»РєРµ:\n\nР Р°Р±РѕС‚Р°РµС‚ Р±С‹СЃС‚СЂРѕ Рё СЃС‚Р°Р±РёР»СЊРЅРѕ."
+    ? "Привет. Подключись к VPN по моей ссылке:\n\nРаботает быстро и стабильно."
     : "Hey! Connect to VPN using my link:\n\nFast and reliable.";
   const shareUrl="https://t.me/share/url?url="+encodeURIComponent(link)+"&text="+encodeURIComponent(shareText);
   const rows=[];
-  // URL button в†’ opens Telegram's native share picker
+  // URL button → opens Telegram's native share picker
   rows.push([{text:tx.btn_invite, url:shareUrl}]);
   rows.push([
     {text:tx.btn_ref_hist,callback_data:"ref:hist:0"},
@@ -1985,7 +1973,7 @@ function giftKb(uid) {
   const tx=T(uid);
   const lang=getLang(uid);
   return{inline_keyboard:[
-    ...tariffs().map(t=>[{text:`рџЋЃ ${tariffTitle(t,lang)} вЂ” ${rub(t.price_rub)}`,callback_data:`g:p:${t.code}`}]),
+    ...tariffs().map(t=>[{text:`🎁 ${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`g:p:${t.code}`}]),
     [{text:tx.btn_home,callback_data:"v:home"}],
   ]};
 }
@@ -1993,29 +1981,33 @@ function giftKb(uid) {
 function langKb(uid) {
   const lang=getLang(uid);
   return{inline_keyboard:[
-    [{text:(lang==="ru"?"вњ“ ":"")+"рџ‡·рџ‡є Р СѓСЃСЃРєРёР№",callback_data:"lang:ru"}],
-    [{text:(lang==="en"?"вњ“ ":"")+"рџ‡¬рџ‡§ English",callback_data:"lang:en"}],
+    [{text:(lang==="ru"?"✓ ":"")+"🇷🇺 Русский",callback_data:"lang:ru"}],
+    [{text:(lang==="en"?"✓ ":"")+"🇬🇧 English",callback_data:"lang:en"}],
     [{text:T(uid).btn_home,callback_data:"v:home"}],
   ]};
 }
 
 function pagingKb(uid, prefix, page, total, size, backTarget) {
   const tx=T(uid), max=Math.max(0,Math.ceil(total/size)-1), nav=[];
-  if(page>0)   nav.push({text:"в—Ђ",callback_data:`${prefix}:${page-1}`});
+  if(page>0)   nav.push({text:"◀",callback_data:`${prefix}:${page-1}`});
   nav.push({text:`${page+1}/${max+1}`,callback_data:"noop"});
-  if(page<max) nav.push({text:"в–¶",callback_data:`${prefix}:${page+1}`});
+  if(page<max) nav.push({text:"▶",callback_data:`${prefix}:${page+1}`});
   return{inline_keyboard:[nav,[{text:tx.btn_back,callback_data:backTarget}]]};
 }
 
 function back(uid,t="v:home"){ return{inline_keyboard:[[{text:T(uid).btn_back,callback_data:t}]]}; }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Text builders
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function homeText(u) {
   const tx=T(u.tg_id), s=sub(u.tg_id), hasSub=activeSub(s), isRu=getLang(u.tg_id)==="ru";
   const lines=[
     isRu?"<b>Dreinn VPN</b>":"<b>Dreinn VPN</b>",
+    "",
+    isRu?"⚡ Стабильный мобильный интернет":"⚡ Stable mobile internet",
+    isRu?"⚡ Скорость до 1 ГБ/с":"⚡ Speed up to 1GB/s",
+    isRu?"💎 Без логов и регистрации":"💎 No logs",
     "",
     tx.home_info(u.tg_id, u.balance_rub),
   ];
@@ -2041,14 +2033,14 @@ function subText(uid) {
   const ms=Math.max(0,s.expires_at-now()), dd=Math.floor(ms/86400000), hh=Math.floor((ms%86400000)/3600000), mm=Math.floor((ms%3600000)/60000);
   const devCount=Number(s.devices||3)||3;
   const instruction=isRu
-    ?"вќ— Р”Р»СЏ РёСЃРїРѕР»СЊР·РѕРІР°РЅРёСЏ VPN РІР°Рј РЅРµРѕР±С…РѕРґРёРјРѕ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ РїСЂРёР»РѕР¶РµРЅРёРµ РёР· РІРєР»Р°РґРєРё РРЅСЃС‚СЂСѓРєС†РёСЏ.\n\nРџРѕСЃР»Рµ СѓСЃС‚Р°РЅРѕРІРєРё РїСЂРёР»РѕР¶РµРЅРёСЏ, РёСЃРїРѕР»СЊР·СѓР№С‚Рµ РєРЅРѕРїРєСѓ РЅРёР¶Рµ РёР»Рё РѕС‚СЃРєР°РЅРёСЂСѓР№С‚Рµ QR-РєРѕРґ РґР»СЏ РїРѕРґРєР»СЋС‡РµРЅРёСЏ:"
-    :"вќ— To use VPN, install the app from the Instruction tab.\n\nAfter installation, use the button below or scan the QR code to connect:";
+    ?"❗ Для использования VPN вам необходимо установить приложение из вкладки Инструкция.\n\nПосле установки приложения, используйте кнопку ниже или отсканируйте QR-код для подключения:"
+    :"❗ To use VPN, install the app from the Instruction tab.\n\nAfter installation, use the button below or scan the QR code to connect:";
   return [
-    `вљЎ <b>${isRu?"РџРѕРґРєР»СЋС‡РµРЅРёРµ":"Connection"}</b>`,
+    `⚡ <b>${isRu?"Подключение":"Connection"}</b>`,
     "",
     instruction,
     "",
-    tx.sub_plan(s.plan_title||s.plan_code||"вЂ”"),
+    tx.sub_plan(s.plan_title||s.plan_code||"—"),
     tx.sub_exp(dt(s.expires_at,lang)),
     tx.sub_left(dd,hh,mm),
   ].join("\n");
@@ -2059,20 +2051,20 @@ function tariffTitle(t, lang) {
   if(lang==="ru") return t.title;
   // Auto-translate common RU patterns
   return t.title
-    .replace(/1\s*РјРµСЃСЏС†/i,  "1 month")
-    .replace(/3\s*РјРµСЃСЏС†[Р°-СЏ]*/i, "3 months")
-    .replace(/6\s*РјРµСЃСЏС†[Р°-СЏ]*/i, "6 months")
-    .replace(/1\s*РіРѕРґ/i,    "1 year")
-    .replace(/2\s*РіРѕРґ[Р°-СЏ]*/i, "2 years")
-    .replace(/РјРµСЃСЏС†[Р°-СЏ]*/i, "month(s)")
-    .replace(/РіРѕРґ[Р°-СЏ]*/i,   "year");
+    .replace(/1\s*месяц/i,  "1 month")
+    .replace(/3\s*месяц[а-я]*/i, "3 months")
+    .replace(/6\s*месяц[а-я]*/i, "6 months")
+    .replace(/1\s*год/i,    "1 year")
+    .replace(/2\s*год[а-я]*/i, "2 years")
+    .replace(/месяц[а-я]*/i, "month(s)")
+    .replace(/год[а-я]*/i,   "year");
 }
 
 function buyText(uid) {
   const tx=T(uid), u=user(uid), s=sub(uid), act=activeSub(s), trial=isTrialSub(uid), isRu=getLang(uid)==="ru";
   const lines=[
     tx.buy_balance(u.balance_rub),
-    isRu?"Р’С‹Р±РµСЂРёС‚Рµ С‚Р°СЂРёС„ Рё СЃРїРѕСЃРѕР± РѕРїР»Р°С‚С‹.":"Choose a plan and payment method.",
+    isRu?"Выберите тариф и способ оплаты.":"Choose a plan and payment method.",
   ];
   if(trial)     lines.push("",tx.buy_trial_active);
   else if(act)  lines.push("",tx.buy_active);
@@ -2084,7 +2076,7 @@ function topupText(uid) {
   const rate=_rateCache.val;
   const lines=[tx.topup_title,""];
   if(CRYPTOBOT_TOKEN) lines.push(tx.crypto_rate(rate),"");
-  lines.push(isRu?"Р’С‹Р±РµСЂРёС‚Рµ СЃРїРѕСЃРѕР± РїРѕРїРѕР»РЅРµРЅРёСЏ:":"Choose top-up method:");
+  lines.push(isRu?"Выберите способ пополнения:":"Choose top-up method:");
   return lines.join("\n");
 }
 
@@ -2098,17 +2090,17 @@ function refText(uid) {
     tx.ref_title,"",
     // ref link in blockquote (monospace = tap to copy on mobile)
     `<blockquote><code>${link}</code></blockquote>`,
-    isRu?"<i>(РќР°Р¶РјРёС‚Рµ, С‡С‚РѕР±С‹ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ)</i>":"<i>(Tap to copy)</i>","",
+    isRu?"<i>(Нажмите, чтобы скопировать)</i>":"<i>(Tap to copy)</i>","",
     // stats
-    isRu?`РџСЂРёРіР»Р°С€РµРЅРѕ: <b>${st.c||0}</b>`:`Invited: <b>${st.c||0}</b>`,
-    isRu?`Р—Р°СЂР°Р±РѕС‚Р°РЅРѕ: <b>${totalEarned.toFixed(2)}в‚Ѕ</b>`:`Earned: <b>${totalEarned.toFixed(2)}в‚Ѕ</b>`,"",
-    // promo block вЂ” reward credited to main balance
+    isRu?`Приглашено: <b>${st.c||0}</b>`:`Invited: <b>${st.c||0}</b>`,
+    isRu?`Заработано: <b>${totalEarned.toFixed(2)}₽</b>`:`Earned: <b>${totalEarned.toFixed(2)}₽</b>`,"",
+    // promo block — reward credited to main balance
     isRu?[
-      "в­ђ <b>Р­С‚Рѕ РІС‹РіРѕРґРЅРѕ!</b>",
-      `<i>${pct}% РѕС‚ РєР°Р¶РґРѕР№ РїРѕРєСѓРїРєРё РїРѕРґРїРёСЃРєРё СЂРµС„РµСЂР°Р»Р°</i>`,
-      `<i>РќР°С‡РёСЃР»СЏРµС‚СЃСЏ РЅР° РѕСЃРЅРѕРІРЅРѕР№ Р±Р°Р»Р°РЅСЃ</i>`,
+      "⭐ <b>Это выгодно!</b>",
+      `<i>${pct}% от каждой покупки подписки реферала</i>`,
+      `<i>Начисляется на основной баланс</i>`,
     ].join("\n"):[
-      "в­ђ <b>Great deal!</b>",
+      "⭐ <b>Great deal!</b>",
       `<i>${pct}% from every referral's subscription purchase</i>`,
       `<i>Credited to your main balance</i>`,
     ].join("\n"),
@@ -2123,11 +2115,11 @@ function aboutText(uid) {
 
 function otherText(uid) {
   const isRu=getLang(uid)==="ru", proxy=lnk.proxy();
-  const title=isRu?"<b>РћСЃС‚Р°Р»СЊРЅРѕРµ</b>":"<b>Other</b>";
+  const title=isRu?"<b>Остальное</b>":"<b>Other</b>";
   const lines=[title,""];
   if(proxy) lines.push(isRu?
-    `<a href="${proxy}">рџ†“ Р‘РµСЃРїР»Р°С‚РЅС‹Рµ РїСЂРѕРєСЃРё РґР»СЏ Telegram</a>`:
-    `<a href="${proxy}">рџ†“ Free Telegram proxies</a>`
+    `<a href="${proxy}">🆓 Бесплатные прокси для Telegram</a>`:
+    `<a href="${proxy}">🆓 Free Telegram proxies</a>`
   );
   return lines.join("\n");
 }
@@ -2139,8 +2131,8 @@ function purchasesText(uid, page=0) {
   if(!rows.length) return{text:[tx.ph_title,"",tx.ph_empty].join("\n"),total,page,size};
   const lines=[tx.ph_title,""];
   for(const p of rows){
-    const icon=p.kind==="gift"?"рџЋЃ":p.kind==="renew"?"рџ”„":"рџ’і";
-    lines.push(`${icon} <b>${esc(p.tariff_title)}</b> вЂ” ${rub(p.amount_rub)}`);
+    const icon=p.kind==="gift"?"🎁":p.kind==="renew"?"🔄":"💳";
+    lines.push(`${icon} <b>${esc(p.tariff_title)}</b> — ${rub(p.amount_rub)}`);
     lines.push(`   <i>${dt(p.created_at)}</i>`);
   }
   lines.push("",tx.ph_page(page,Math.max(1,Math.ceil(total/size))));
@@ -2154,16 +2146,16 @@ function refHistoryText(uid, page=0) {
   if(!rows.length) return{text:[tx.rh_title,"",tx.rh_empty].join("\n"),total,page,size};
   const lines=[tx.rh_title,""];
   for(const r of rows){
-    lines.push(`+<b>${rub(r.reward_rub)}</b>  <i>(${r.percent}% РѕС‚ ${rub(r.amount_rub)})</i>`);
+    lines.push(`+<b>${rub(r.reward_rub)}</b>  <i>(${r.percent}% от ${rub(r.amount_rub)})</i>`);
     lines.push(`   <i>${dt(r.created_at)}</i>`);
   }
   lines.push("",tx.rh_page(page,Math.max(1,Math.ceil(total/size))));
   return{text:lines.join("\n"),total,page,size};
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Admin panels
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 function adminStatsText() {
   const uCount  = Number(db.prepare("SELECT COUNT(*) c FROM users").get().c);
   const aCount  = Number(db.prepare("SELECT COUNT(*) c FROM subscriptions WHERE is_active=1 AND expires_at>?").get(now()).c);
@@ -2178,35 +2170,35 @@ function adminStatsText() {
   const fkTotal=Number(db.prepare("SELECT COALESCE(SUM(amount_rub),0) s FROM freekassa_payments WHERE status='paid'").get().s||0);
   const fkCount=Number(db.prepare("SELECT COUNT(*) c FROM freekassa_payments WHERE status='paid'").get().c||0);
   return [
-    "<b>РЎС‚Р°С‚РёСЃС‚РёРєР°</b>","",
-    `РџРѕР»СЊР·РѕРІР°С‚РµР»РµР№: <b>${uCount}</b>  (+${newDay} СЃРµРіРѕРґРЅСЏ)`,
-    `РђРєС‚РёРІРЅС‹С… РїРѕРґРїРёСЃРѕРє: <b>${aCount}</b>`,
-    `Р’С‹СЂСѓС‡РєР° Р·Р° СЃРµРіРѕРґРЅСЏ: <b>${rub(revDay)}</b>`,
-    `РћР±С‰Р°СЏ РІС‹СЂСѓС‡РєР°: <b>${rub(revenue)}</b>`,
-    `РќР°С‡РёСЃР»РµРЅРѕ СЂРµС„РµСЂР°Р»Р°Рј: <b>${rub(refPaid)}</b>`,
-    `Crypto РїР»Р°С‚РµР¶РµР№: <b>${cryptoCount}</b> (${rub(cryptoTotal)})`,
-    `FreeKassa РїР»Р°С‚РµР¶РµР№: <b>${fkCount}</b> (${rub(fkTotal)})`,
+    "<b>Статистика</b>","",
+    `Пользователей: <b>${uCount}</b>  (+${newDay} сегодня)`,
+    `Активных подписок: <b>${aCount}</b>`,
+    `Выручка за сегодня: <b>${rub(revDay)}</b>`,
+    `Общая выручка: <b>${rub(revenue)}</b>`,
+    `Начислено рефералам: <b>${rub(refPaid)}</b>`,
+    `Crypto платежей: <b>${cryptoCount}</b> (${rub(cryptoTotal)})`,
+    `FreeKassa платежей: <b>${fkCount}</b> (${rub(fkTotal)})`,
   ].join("\n");
 }
 
 function adminImgsText() {
-  const views=[["home","Р“Р»Р°РІРЅР°СЏ"],["profile","РџСЂРѕС„РёР»СЊ"],["sub","РџРѕРґРїРёСЃРєР°"],["buy","РўР°СЂРёС„С‹"],["topup","РџРѕРїРѕР»РЅРµРЅРёРµ"],["ref","Р РµС„РµСЂР°Р»С‹"],["gift","РџРѕРґР°СЂРѕРє"],["guide","РРЅСЃС‚СЂСѓРєС†РёСЏ"],["about","Рћ РЅР°СЃ"]];
-  const lines=["<b>РР·РѕР±СЂР°Р¶РµРЅРёСЏ СЂР°Р·РґРµР»РѕРІ</b>",""];
-  views.forEach(([v,label])=>{const has=!!viewImg(v);lines.push(`${has?"вњ…":"в¬њ"} ${label}`);});
+  const views=[["home","Главная"],["profile","Профиль"],["sub","Подписка"],["buy","Тарифы"],["topup","Пополнение"],["ref","Рефералы"],["gift","Подарок"],["guide","Инструкция"],["about","О нас"]];
+  const lines=["<b>Изображения разделов</b>",""];
+  views.forEach(([v,label])=>{const has=!!viewImg(v);lines.push(`${has?"✅":"⬜"} ${label}`);});
   return lines.join("\n");
 }
 
 function adminLinksText() {
   const rows=[
-    ["url_support","РџРѕРґРґРµСЂР¶РєР°",lnk.support()],
-    ["url_privacy","РџРѕР»РёС‚РёРєР° РєРѕРЅС„.",lnk.privacy()],
-    ["url_terms","РЎРѕРіР»Р°С€РµРЅРёРµ",lnk.terms()],
-    ["url_proxy","РџСЂРѕРєСЃРё",lnk.proxy()],
-    ["url_news","РљР°РЅР°Р»",lnk.news()],
-    ["url_status","РЎС‚Р°С‚СѓСЃ СЃРµСЂРІРµСЂРѕРІ",lnk.status()],
+    ["url_support","Поддержка",lnk.support()],
+    ["url_privacy","Политика конф.",lnk.privacy()],
+    ["url_terms","Соглашение",lnk.terms()],
+    ["url_proxy","Прокси",lnk.proxy()],
+    ["url_news","Канал",lnk.news()],
+    ["url_status","Статус серверов",lnk.status()],
   ];
-  const lines=["<b>РќР°СЃС‚СЂРѕР№РєР° СЃСЃС‹Р»РѕРє</b>",""];
-  rows.forEach(([,label,val])=>lines.push(`${val?"вњ…":"в¬њ"} ${label}: ${val?`<code>${esc(val)}</code>`:"<i>РЅРµ Р·Р°РґР°РЅРѕ</i>"}`));
+  const lines=["<b>Настройка ссылок</b>",""];
+  rows.forEach(([,label,val])=>lines.push(`${val?"✅":"⬜"} ${label}: ${val?`<code>${esc(val)}</code>`:"<i>не задано</i>"}`));
   return lines.join("\n");
 }
 
@@ -2218,13 +2210,13 @@ function adminFkText() {
   const enabled = isFkEnabled();
   const notifyUrl = `https://${FK_DOMAIN}:${FK_PORT}${path}`;
   return [
-    "<b>FreeKassa РЅР°СЃС‚СЂРѕР№РєРё</b>",
+    "<b>FreeKassa настройки</b>",
     "",
-    `РЎС‚Р°С‚СѓСЃ: <b>${enabled ? "РІРєР»СЋС‡РµРЅРѕ вњ…" : "РІС‹РєР»СЋС‡РµРЅРѕ вќЊ"}</b>`,
-    `shop_id: <code>${sid || "РЅРµ Р·Р°РґР°РЅ"}</code>`,
+    `Статус: <b>${enabled ? "включено ✅" : "выключено ❌"}</b>`,
+    `shop_id: <code>${sid || "не задан"}</code>`,
     `min amount: <code>${min}</code>`,
     `webhook path: <code>${esc(path)}</code>`,
-    `server ip: <code>${esc(ip || "РЅРµ РѕРїСЂРµРґРµР»РµРЅ")}</code>`,
+    `server ip: <code>${esc(ip || "не определен")}</code>`,
     "",
     `<i>Notification URL:</i>`,
     `<code>${esc(notifyUrl)}</code>`,
@@ -2237,20 +2229,20 @@ function adminUserInfoText(tu) {
   const ts=sub(tu.tg_id), hasSub=activeSub(ts);
   const pCount=Number(db.prepare("SELECT COUNT(*) c FROM purchases WHERE tg_id=?").get(tu.tg_id).c||0);
   return [
-    "<b>РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ</b>","",
+    "<b>Пользователь</b>","",
     `ID: <code>${tu.tg_id}</code>`,
-    `РРјСЏ: ${esc(tu.first_name)}`,
-    `Username: ${tu.username?`@${esc(tu.username)}`:"вЂ”"}`,
-    `<blockquote>Р‘Р°Р»Р°РЅСЃ: <b>${rub(tu.balance_rub)}</b>\nР РµС„. РЅР°С‡РёСЃР»РµРЅРѕ: <b>${rub(tu.ref_earned||0)}</b></blockquote>`,
-    `РџРѕРєСѓРїРѕРє: <b>${pCount}</b>`,
-    `РџРѕРґРїРёСЃРєР°: ${hasSub?`<b>Р°РєС‚РёРІРЅР°</b> РґРѕ ${dt(ts.expires_at)}`:"РЅРµС‚"}`,
-    `<i>Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅ: ${dt(tu.created_at)}</i>`,
+    `Имя: ${esc(tu.first_name)}`,
+    `Username: ${tu.username?`@${esc(tu.username)}`:"—"}`,
+    `<blockquote>Баланс: <b>${rub(tu.balance_rub)}</b>\nРеф. начислено: <b>${rub(tu.ref_earned||0)}</b></blockquote>`,
+    `Покупок: <b>${pCount}</b>`,
+    `Подписка: ${hasSub?`<b>активна</b> до ${dt(ts.expires_at)}`:"нет"}`,
+    `<i>Зарегистрирован: ${dt(tu.created_at)}</i>`,
   ].join("\n");
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-// Render  вЂ” the main view dispatcher
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
+// Render  — the main view dispatcher
+// ─────────────────────────────────────────────────────────────────────────────
 async function render(uid, chatId, msgId, view, data={}) {
   const u=user(uid); if(!u) return;
   const tx=T(uid);
@@ -2281,7 +2273,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       const rawGuide = lang==="en"
         ? (setting("guide_text_en","")||setting("guide_text",""))
         : setting("guide_text","");
-      text=rawGuide?parseLinks(rawGuide):[tx.guide_title,"","<i>РРЅСЃС‚СЂСѓРєС†РёСЏ РЅРµ РЅР°СЃС‚СЂРѕРµРЅР°.</i>"].join("\n");
+      text=rawGuide?parseLinks(rawGuide):[tx.guide_title,"","<i>Инструкция не настроена.</i>"].join("\n");
       const kbRows=[];
       if(lnk.support()) kbRows.push([{text:tx.btn_support,url:lnk.support()}]);
       kbRows.push([{text:tx.btn_home,callback_data:"v:home"}]);
@@ -2330,37 +2322,37 @@ async function render(uid, chatId, msgId, view, data={}) {
       break;
     }
 
-    // в”Ђв”Ђ Admin в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // ── Admin ──────────────────────────────────────────────────────────────
     case "a_main": {
       text=adminStatsText();
       kb={inline_keyboard:[
-        [{text:"рџ’ё РўР°СЂРёС„С‹",callback_data:"a:t"},{text:"рџЋћ GIF-Р°РЅРёРјР°С†РёРё",callback_data:"a:g"}],
-        [{text:"рџ“Ё Р Р°СЃСЃС‹Р»РєР°",callback_data:"a:b"},{text:"рџ”— РЎСЃС‹Р»РєРё",callback_data:"a:links"}],
-        [{text:"рџ–ј РР·РѕР±СЂР°Р¶РµРЅРёСЏ",callback_data:"a:imgs"}],
-        [{text:"рџ¤ќ Р РµС„. РїСЂРѕС†РµРЅС‚",callback_data:"a:r"},{text:"рџ“‹ РРЅСЃС‚СЂСѓРєС†РёСЏ",callback_data:"a:guide_edit"}],
-        [{text:"рџ“ў РљР°РЅР°Р» + РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ",callback_data:"a:channel"}],
-        [{text:"рџ’і FreeKassa",callback_data:"a:fk"}],
-        [{text:"рџЋџ РџСЂРѕРјРѕРєРѕРґС‹",callback_data:"a:promo"},{text:"рџ”Ќ РџРѕРёСЃРє СЋР·РµСЂР°",callback_data:"a:find"}],
-        [{text:"рџ‘Ґ РџРѕР»СЊР·РѕРІР°С‚РµР»Рё",callback_data:"a:users:0"},{text:"рџ—„ Р‘Р°Р·Р° РґР°РЅРЅС‹С…",callback_data:"a:db"}],
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:"v:home"}],
+        [{text:"💸 Тарифы",callback_data:"a:t"},{text:"🎞 GIF-анимации",callback_data:"a:g"}],
+        [{text:"📨 Рассылка",callback_data:"a:b"},{text:"🔗 Ссылки",callback_data:"a:links"}],
+        [{text:"🖼 Изображения",callback_data:"a:imgs"}],
+        [{text:"🤝 Реф. процент",callback_data:"a:r"},{text:"📋 Инструкция",callback_data:"a:guide_edit"}],
+        [{text:"📢 Канал + Пробный период",callback_data:"a:channel"}],
+        [{text:"💳 FreeKassa",callback_data:"a:fk"}],
+        [{text:"🎟 Промокоды",callback_data:"a:promo"},{text:"🔍 Поиск юзера",callback_data:"a:find"}],
+        [{text:"👥 Пользователи",callback_data:"a:users:0"},{text:"🗄 База данных",callback_data:"a:db"}],
+        [{text:"« Назад",callback_data:"v:home"}],
       ]};
       break;
     }
 
     case "a_promo": {
       const promos = db.prepare("SELECT * FROM promo_codes ORDER BY rowid DESC LIMIT 20").all();
-      const lines = ["<b>РџСЂРѕРјРѕРєРѕРґС‹</b>",""];
-      if (!promos.length) lines.push("<i>РџСЂРѕРјРѕРєРѕРґРѕРІ РЅРµС‚.</i>");
+      const lines = ["<b>Промокоды</b>",""];
+      if (!promos.length) lines.push("<i>Промокодов нет.</i>");
       else promos.forEach(p=>{
-        const status = p.is_active ? "вњ…" : "вќЊ";
-        const uses = p.uses_max > 0 ? `${p.uses_current}/${p.uses_max}` : `${p.uses_current}/в€ћ`;
-        lines.push(`${status} <code>${esc(p.code)}</code> вЂ” <b>${p.discount_pct}%</b>  (${uses})`);
+        const status = p.is_active ? "✅" : "❌";
+        const uses = p.uses_max > 0 ? `${p.uses_current}/${p.uses_max}` : `${p.uses_current}/∞`;
+        lines.push(`${status} <code>${esc(p.code)}</code> — <b>${p.discount_pct}%</b>  (${uses})`);
       });
       text=lines.join("\n");
       kb={inline_keyboard:[
-        [{text:"вћ• Р”РѕР±Р°РІРёС‚СЊ РїСЂРѕРјРѕРєРѕРґ",callback_data:"a:promo_add"}],
-        [{text:"рџ—‘ Р”РµР°РєС‚РёРІРёСЂРѕРІР°С‚СЊ",callback_data:"a:promo_del"}],
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}],
+        [{text:"➕ Добавить промокод",callback_data:"a:promo_add"}],
+        [{text:"🗑 Деактивировать",callback_data:"a:promo_del"}],
+        [{text:"« Назад",callback_data:"a:main"}],
       ]};
       break;
     }
@@ -2369,132 +2361,132 @@ async function render(uid, chatId, msgId, view, data={}) {
       const page=Number(data.page||0), size=10, off=page*size;
       const rows=db.prepare("SELECT u.*,(SELECT is_active FROM subscriptions s WHERE s.tg_id=u.tg_id AND s.is_active=1) as sub_active FROM users u ORDER BY u.created_at DESC LIMIT ? OFFSET ?").all(size,off);
       const total=Number(db.prepare("SELECT COUNT(*) c FROM users").get().c||0);
-      const lines=["<b>РџРѕР»СЊР·РѕРІР°С‚РµР»Рё</b>",""];
+      const lines=["<b>Пользователи</b>",""];
       rows.forEach(u=>{
-        const subMark=u.sub_active?"в­ђ":"";
+        const subMark=u.sub_active?"⭐":"";
         lines.push(`${subMark} <code>${u.tg_id}</code> ${esc(u.first_name||"")}${u.username?` @${esc(u.username)}`:""}`);
       });
       text=lines.join("\n");
       const nav=[];
-      if(page>0)nav.push({text:"в—Ђ",callback_data:`a:users:${page-1}`});
+      if(page>0)nav.push({text:"◀",callback_data:`a:users:${page-1}`});
       nav.push({text:`${page+1}/${Math.ceil(total/size)||1}`,callback_data:"noop"});
-      if((page+1)*size<total)nav.push({text:"в–¶",callback_data:`a:users:${page+1}`});
-      kb={inline_keyboard:[nav,[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};
+      if((page+1)*size<total)nav.push({text:"▶",callback_data:`a:users:${page+1}`});
+      kb={inline_keyboard:[nav,[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     }
 
     case "a_grant": {
       const targetId=Number(data.id||0);
-      if(!targetId){text="РћС€РёР±РєР°: ID РЅРµ РїРµСЂРµРґР°РЅ.";kb={inline_keyboard:[[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};break;}
+      if(!targetId){text="Ошибка: ID не передан.";kb={inline_keyboard:[[{text:"« Назад",callback_data:"a:main"}]]};break;}
       const gtu=user(targetId);
-      text=`<b>Р’С‹РґР°С‚СЊ РїРѕРґРїРёСЃРєСѓ</b>\n\nРџРѕР»СЊР·РѕРІР°С‚РµР»СЊ: ${gtu?esc(gtu.first_name||String(targetId)):String(targetId)} (<code>${targetId}</code>)\n\nР’С‹Р±РµСЂРёС‚Рµ С‚Р°СЂРёС„:`;
+      text=`<b>Выдать подписку</b>\n\nПользователь: ${gtu?esc(gtu.first_name||String(targetId)):String(targetId)} (<code>${targetId}</code>)\n\nВыберите тариф:`;
       kb={inline_keyboard:[
-        ...tariffs().map(t=>[{text:`${t.title} (${t.duration_days} РґРЅ.)`,callback_data:`a:grant_ok:${targetId}:${t.code}`}]),
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:`a:user_back:${targetId}`}],
+        ...tariffs().map(t=>[{text:`${t.title} (${t.duration_days} дн.)`,callback_data:`a:grant_ok:${targetId}:${t.code}`}]),
+        [{text:"« Назад",callback_data:`a:user_back:${targetId}`}],
       ]};
       break;
     }
 
     case "a_tariffs":
-      text=`<b>Р¦РµРЅС‹ С‚Р°СЂРёС„РѕРІ</b>\n\n${tariffs().map(x=>`${x.title}: <b>${rub(x.price_rub)}</b>`).join("\n")}\n\n<i>Р”РѕРї. СѓСЃС‚СЂРѕР№СЃС‚РІР° (РѕС‚ 4+): +${rub(devicesExtraPrice())} Р·Р° РєР°Р¶РґРѕРµ</i>`;
-      kb={inline_keyboard:[...tariffs().map(x=>[{text:`вњЏпёЏ ${x.title} вЂ” ${rub(x.price_rub)}`,callback_data:`a:te:${x.code}`}]),[{text:`вљ™пёЏ Р¦РµРЅР° Р·Р° РґРѕРї. СѓСЃС‚СЂРѕР№СЃС‚РІРѕ вЂ” ${rub(devicesExtraPrice())}`,callback_data:"a:dev_price"}],[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};
+      text=`<b>Цены тарифов</b>\n\n${tariffs().map(x=>`${x.title}: <b>${rub(x.price_rub)}</b>`).join("\n")}\n\n<i>Доп. устройства (от 4+): +${rub(devicesExtraPrice())} за каждое</i>`;
+      kb={inline_keyboard:[...tariffs().map(x=>[{text:`✏️ ${x.title} — ${rub(x.price_rub)}`,callback_data:`a:te:${x.code}`}]),[{text:`⚙️ Цена за доп. устройство — ${rub(devicesExtraPrice())}`,callback_data:"a:dev_price"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_gif":
-      text="<b>GIF-Р°РЅРёРјР°С†РёРё</b>\n\nРќР°СЃС‚СЂРѕР№С‚Рµ Р°РЅРёРјР°С†РёРё РґР»СЏ СЃРѕР±С‹С‚РёР№:";
+      text="<b>GIF-анимации</b>\n\nНастройте анимации для событий:";
       kb={inline_keyboard:[
-        [{text:`Р“Р»Р°РІРЅР°СЏ${setting("gif_main_menu")?" вњ…":""}`,callback_data:"a:ge:gif_main_menu"}],
-        [{text:`РџРѕРєСѓРїРєР°${setting("gif_purchase_success")?" вњ…":""}`,callback_data:"a:ge:gif_purchase_success"}],
-        [{text:`РџРѕРґР°СЂРѕРє${setting("gif_gift_success")?" вњ…":""}`,callback_data:"a:ge:gif_gift_success"}],
-        [{text:`Р Р°СЃСЃС‹Р»РєР°${setting("gif_broadcast")?" вњ…":""}`,callback_data:"a:ge:gif_broadcast"}],
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}],
+        [{text:`Главная${setting("gif_main_menu")?" ✅":""}`,callback_data:"a:ge:gif_main_menu"}],
+        [{text:`Покупка${setting("gif_purchase_success")?" ✅":""}`,callback_data:"a:ge:gif_purchase_success"}],
+        [{text:`Подарок${setting("gif_gift_success")?" ✅":""}`,callback_data:"a:ge:gif_gift_success"}],
+        [{text:`Рассылка${setting("gif_broadcast")?" ✅":""}`,callback_data:"a:ge:gif_broadcast"}],
+        [{text:"« Назад",callback_data:"a:main"}],
       ]};
       break;
     case "a_imgs": {
       text=adminImgsText();
-      const views=[["home","Р“Р»Р°РІРЅР°СЏ"],["sub","РџРѕРґРїРёСЃРєР° / РџСЂРѕС„РёР»СЊ"],["buy","РўР°СЂРёС„С‹"],["topup","РџРѕРїРѕР»РЅРµРЅРёРµ"],["ref","Р РµС„РµСЂР°Р»С‹"],["gift","РџРѕРґР°СЂРѕРє"],["guide","РРЅСЃС‚СЂСѓРєС†РёСЏ"],["about","Рћ РЅР°СЃ"]];
-      kb={inline_keyboard:[...views.map(([v,label])=>[{text:`рџ–ј ${label}${viewImg(v)?" вњ…":""}`,callback_data:`a:img:${v}`}]),[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};
+      const views=[["home","Главная"],["sub","Подписка / Профиль"],["buy","Тарифы"],["topup","Пополнение"],["ref","Рефералы"],["gift","Подарок"],["guide","Инструкция"],["about","О нас"]];
+      kb={inline_keyboard:[...views.map(([v,label])=>[{text:`🖼 ${label}${viewImg(v)?" ✅":""}`,callback_data:`a:img:${v}`}]),[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     }
     case "a_links": {
       text=adminLinksText();
-      const linkKeys=[["url_support","РџРѕРґРґРµСЂР¶РєР°"],["url_privacy","РџРѕР»РёС‚РёРєР° РєРѕРЅС„."],["url_terms","РЎРѕРіР»Р°С€РµРЅРёРµ"],["url_proxy","РџСЂРѕРєСЃРё"],["url_news","РљР°РЅР°Р»"],["url_status","РЎС‚Р°С‚СѓСЃ СЃРµСЂРІРµСЂРѕРІ"]];
-      kb={inline_keyboard:[...linkKeys.map(([k,label])=>[{text:`вњЏпёЏ ${label}`,callback_data:`a:lnk:${k}`}]),[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};
+      const linkKeys=[["url_support","Поддержка"],["url_privacy","Политика конф."],["url_terms","Соглашение"],["url_proxy","Прокси"],["url_news","Канал"],["url_status","Статус серверов"]];
+      kb={inline_keyboard:[...linkKeys.map(([k,label])=>[{text:`✏️ ${label}`,callback_data:`a:lnk:${k}`}]),[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     }
     case "a_bcast":
-      text="<b>Р Р°СЃСЃС‹Р»РєР°</b>\n\nРћС‚РїСЂР°РІСЊС‚Рµ Р»СЋР±РѕРµ СЃРѕРѕР±С‰РµРЅРёРµ: С‚РµРєСЃС‚ (СЃ С„РѕСЂРјР°С‚РёСЂРѕРІР°РЅРёРµРј), С„РѕС‚Рѕ, РІРёРґРµРѕ, GIF, РґРѕРєСѓРјРµРЅС‚ РёР»Рё РіРѕР»РѕСЃРѕРІРѕРµ. Р¤РѕСЂРјР°С‚РёСЂРѕРІР°РЅРёРµ Рё РјРµРґРёР° СЃРѕС…СЂР°РЅСЏСЋС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.\n\n<i>Р—Р°РґРµСЂР¶РєР° 35 РјСЃ/СЃРѕРѕР±С‰РµРЅРёРµ РґР»СЏ СЃРѕР±Р»СЋРґРµРЅРёСЏ Р»РёРјРёС‚РѕРІ Telegram.</i>";
-      kb={inline_keyboard:[[{text:"вњЏпёЏ РЎРѕР·РґР°С‚СЊ СЂР°СЃСЃС‹Р»РєСѓ",callback_data:"a:bs"}],[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};
+      text="<b>Рассылка</b>\n\nОтправьте любое сообщение: текст (с форматированием), фото, видео, GIF, документ или голосовое. Форматирование и медиа сохраняются автоматически.\n\n<i>Задержка 35 мс/сообщение для соблюдения лимитов Telegram.</i>";
+      kb={inline_keyboard:[[{text:"✏️ Создать рассылку",callback_data:"a:bs"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_ref":
-      text=["<b>Р РµС„. РїСЂРѕС†РµРЅС‚</b>","",`РЎС‚Р°РІРєР°: <b>${setting("ref_percent","30")}%</b>`,`<i>РќР°С‡РёСЃР»СЏРµС‚СЃСЏ РЅР° РѕСЃРЅРѕРІРЅРѕР№ Р±Р°Р»Р°РЅСЃ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РїСЂРё РїРѕРєСѓРїРєРµ СЂРµС„РµСЂР°Р»Р°.</i>`].join("\n");
-      kb={inline_keyboard:[[{text:"вњЏпёЏ РР·РјРµРЅРёС‚СЊ СЃС‚Р°РІРєСѓ",callback_data:"a:rp"}],[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};
+      text=["<b>Реф. процент</b>","",`Ставка: <b>${setting("ref_percent","30")}%</b>`,`<i>Начисляется на основной баланс пользователя при покупке реферала.</i>`].join("\n");
+      kb={inline_keyboard:[[{text:"✏️ Изменить ставку",callback_data:"a:rp"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_db":
-      text="<b>Р‘Р°Р·Р° РґР°РЅРЅС‹С…</b>\n\nРЎРєР°С‡Р°Р№С‚Рµ РёР»Рё РёРјРїРѕСЂС‚РёСЂСѓР№С‚Рµ Р‘Р”.\nвљ пёЏ РџРѕСЃР»Рµ РёРјРїРѕСЂС‚Р° Р±РѕС‚ РїРµСЂРµР·Р°РїСѓСЃС‚РёС‚СЃСЏ.";
-      kb={inline_keyboard:[[{text:"в¬‡пёЏ РЎРєР°С‡Р°С‚СЊ",callback_data:"a:db_export"}],[{text:"в¬†пёЏ РРјРїРѕСЂС‚",callback_data:"a:db_import_start"}],[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};
+      text="<b>База данных</b>\n\nСкачайте или импортируйте БД.\n⚠️ После импорта бот перезапустится.";
+      kb={inline_keyboard:[[{text:"⬇️ Скачать",callback_data:"a:db_export"}],[{text:"⬆️ Импорт",callback_data:"a:db_import_start"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_user_info": {
       const tu=user(data.id);
-      if(!tu){text="РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.";kb={inline_keyboard:[[{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}]]};break;}
+      if(!tu){text="Пользователь не найден.";kb={inline_keyboard:[[{text:"« Назад",callback_data:"a:main"}]]};break;}
       text=adminUserInfoText(tu);
       const ts=sub(tu.tg_id), hasSub=ts&&activeSub(ts);
       kb={inline_keyboard:[
-        [{text:"вћ• РџРѕРїРѕР»РЅРёС‚СЊ Р±Р°Р»Р°РЅСЃ",callback_data:`a:bal_add:${tu.tg_id}`}],
-        [{text:"рџЋЃ Р’С‹РґР°С‚СЊ РїРѕРґРїРёСЃРєСѓ",callback_data:`a:grant:${tu.tg_id}`}],
-        ...(hasSub?[[{text:"рџљ« РћС‚РѕР±СЂР°С‚СЊ РїРѕРґРїРёСЃРєСѓ",callback_data:`a:sub_revoke:${tu.tg_id}`}]]:[]),
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}],
+        [{text:"➕ Пополнить баланс",callback_data:`a:bal_add:${tu.tg_id}`}],
+        [{text:"🎁 Выдать подписку",callback_data:`a:grant:${tu.tg_id}`}],
+        ...(hasSub?[[{text:"🚫 Отобрать подписку",callback_data:`a:sub_revoke:${tu.tg_id}`}]]:[]),
+        [{text:"« Назад",callback_data:"a:main"}],
       ]};
       break;
     }
     case "a_channel": {
-      const chanId   = setting("channel_id","") || "<i>РЅРµ Р·Р°РґР°РЅ</i>";
-      const chanUrl  = setting("channel_invite_url","") || "<i>РЅРµ Р·Р°РґР°РЅР°</i>";
+      const chanId   = setting("channel_id","") || "<i>не задан</i>";
+      const chanUrl  = setting("channel_invite_url","") || "<i>не задана</i>";
       const tEnabled = trialEnabled();
       const tDays    = trialDays();
       text=[
-        "<b>рџ“ў РљР°РЅР°Р» + РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ</b>",
+        "<b>📢 Канал + Пробный период</b>",
         "",
-        `РљР°РЅР°Р» (ID/@username): <code>${esc(chanId)}</code>`,
-        `РЎСЃС‹Р»РєР°-РїСЂРёРіР»Р°С€РµРЅРёРµ: ${esc(chanUrl)}`,
+        `Канал (ID/@username): <code>${esc(chanId)}</code>`,
+        `Ссылка-приглашение: ${esc(chanUrl)}`,
         "",
-        `РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ: <b>${tEnabled?"РІРєР»СЋС‡С‘РЅ вњ…":"РІС‹РєР»СЋС‡РµРЅ вќЊ"}</b>`,
-        `Р”Р»РёС‚РµР»СЊРЅРѕСЃС‚СЊ: <b>${tDays} РґРЅ.</b>`,
+        `Пробный период: <b>${tEnabled?"включён ✅":"выключен ❌"}</b>`,
+        `Длительность: <b>${tDays} дн.</b>`,
         "",
-        "<i>Р‘РѕС‚ РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂРѕРј РєР°РЅР°Р»Р° РґР»СЏ РїСЂРѕРІРµСЂРєРё РїРѕРґРїРёСЃРєРё.</i>",
+        "<i>Бот должен быть администратором канала для проверки подписки.</i>",
       ].join("\n");
       kb={inline_keyboard:[
-        [{text:"вњЏпёЏ РЈСЃС‚Р°РЅРѕРІРёС‚СЊ РєР°РЅР°Р»",callback_data:"a:chan_id"}],
-        [{text:"рџ”— РЎСЃС‹Р»РєР°-РїСЂРёРіР»Р°С€РµРЅРёРµ",callback_data:"a:chan_url"}],
-        [{text:tEnabled?"рџ”ґ РћС‚РєР»СЋС‡РёС‚СЊ РїСЂРѕР±РЅС‹Р№":"рџџў Р’РєР»СЋС‡РёС‚СЊ РїСЂРѕР±РЅС‹Р№",callback_data:"a:trial_toggle"}],
-        [{text:`вЏ± Р”Р»РёС‚РµР»СЊРЅРѕСЃС‚СЊ: ${tDays} РґРЅ.`,callback_data:"a:trial_days"}],
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}],
+        [{text:"✏️ Установить канал",callback_data:"a:chan_id"}],
+        [{text:"🔗 Ссылка-приглашение",callback_data:"a:chan_url"}],
+        [{text:tEnabled?"🔴 Отключить пробный":"🟢 Включить пробный",callback_data:"a:trial_toggle"}],
+        [{text:`⏱ Длительность: ${tDays} дн.`,callback_data:"a:trial_days"}],
+        [{text:"« Назад",callback_data:"a:main"}],
       ]};
       break;
     }
     case "a_fk": {
       text = adminFkText();
       kb = { inline_keyboard: [
-        [{text:"вњЏпёЏ shop_id",callback_data:"a:fk_shop"}],
-        [{text:"вњЏпёЏ min amount",callback_data:"a:fk_min"}],
-        [{text:"вњЏпёЏ webhook path",callback_data:"a:fk_path"}],
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}],
+        [{text:"✏️ shop_id",callback_data:"a:fk_shop"}],
+        [{text:"✏️ min amount",callback_data:"a:fk_min"}],
+        [{text:"✏️ webhook path",callback_data:"a:fk_path"}],
+        [{text:"« Назад",callback_data:"a:main"}],
       ]};
       break;
     }
     case "a_guide_edit":
       text=[
-        "<b>РРЅСЃС‚СЂСѓРєС†РёСЏ РїРѕ РїРѕРґРєР»СЋС‡РµРЅРёСЋ</b>",
+        "<b>Инструкция по подключению</b>",
         "",
-        "<i>Р¤РѕСЂРјР°С‚ СЃСЃС‹Р»РѕРє: [РќР°Р·РІР°РЅРёРµ|URL]</i>",
+        "<i>Формат ссылок: [Название|URL]</i>",
         "",
-        `рџ‡·рџ‡є <b>RU</b>: <blockquote>${esc(setting("guide_text","")).slice(0,200)||"<i>РЅРµ Р·Р°РґР°РЅР°</i>"}</blockquote>`,
+        `🇷🇺 <b>RU</b>: <blockquote>${esc(setting("guide_text","")).slice(0,200)||"<i>не задана</i>"}</blockquote>`,
         "",
-        `рџ‡¬рџ‡§ <b>EN</b>: <blockquote>${esc(setting("guide_text_en","")).slice(0,200)||"<i>not set</i>"}</blockquote>`,
+        `🇬🇧 <b>EN</b>: <blockquote>${esc(setting("guide_text_en","")).slice(0,200)||"<i>not set</i>"}</blockquote>`,
       ].join("\n");
       kb={inline_keyboard:[
-        [{text:"вњЏпёЏ РР·РјРµРЅРёС‚СЊ рџ‡·рџ‡є Р СѓСЃСЃРєРёР№",callback_data:"a:guide_ru"}],
-        [{text:"вњЏпёЏ Edit рџ‡¬рџ‡§ English",callback_data:"a:guide_en"}],
-        [{text:"В« РќР°Р·Р°Рґ",callback_data:"a:main"}],
+        [{text:"✏️ Изменить 🇷🇺 Русский",callback_data:"a:guide_ru"}],
+        [{text:"✏️ Edit 🇬🇧 English",callback_data:"a:guide_en"}],
+        [{text:"« Назад",callback_data:"a:main"}],
       ]};
       break;
     default:
@@ -2505,9 +2497,9 @@ async function render(uid, chatId, msgId, view, data={}) {
   setMenu(uid,chatId,nm);
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Crypto topup flows
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function startCryptoTopup(uid, chatId) {
   expireOldCryptoPayments(uid);
   const rate=await getUsdtRate(), tx=T(uid);
@@ -2527,9 +2519,9 @@ async function handleCryptoAmount(uid, chatId, text, promptMsgId, userMsgId) {
     if(promptMsgId) {
       await tg("editMessageText",{
         chat_id:chatId, message_id:promptMsgId,
-        text:`вќЊ ${tx.crypto_min(CRYPTO_MIN_RUB)}\n\n${tx.crypto_enter}`,
+        text:`❌ ${tx.crypto_min(CRYPTO_MIN_RUB)}\n\n${tx.crypto_enter}`,
         parse_mode:"HTML",
-        reply_markup:{inline_keyboard:[[{text:"вќЊ РћС‚РјРµРЅР°",callback_data:"cancel:topup_crypto"}]]},
+        reply_markup:{inline_keyboard:[[{text:"❌ Отмена",callback_data:"cancel:topup_crypto"}]]},
       }).catch(()=>{});
     }
     return;
@@ -2539,7 +2531,7 @@ async function handleCryptoAmount(uid, chatId, text, promptMsgId, userMsgId) {
   delMsg(chatId, promptMsgId);
   const inv=await createCryptoInvoice(amount);
   if(!inv){
-    await tg("sendMessage",{chat_id:chatId,text:"вќЊ CryptoBot РЅРµРґРѕСЃС‚СѓРїРµРЅ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ."});
+    await tg("sendMessage",{chat_id:chatId,text:"❌ CryptoBot недоступен. Попробуйте позже."});
     return;
   }
   const cpId=createCryptoPaymentRow(uid,amount,inv.amountUsdt,inv.rate,inv.invoiceId,inv.payUrl);
@@ -2570,7 +2562,7 @@ async function handleFkAmount(uid, chatId, text, methodId, promptMsgId, userMsgI
   delMsg(chatId, userMsgId);
   if (!isFkEnabled()) {
     delMsg(chatId, promptMsgId);
-    await tg("sendMessage", { chat_id: chatId, text: "вќЊ РЎРїРѕСЃРѕР± РїРѕРїРѕР»РЅРµРЅРёСЏ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ." });
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Способ пополнения временно недоступен." });
     return;
   }
   const amount = Math.round(parseFloat(String(text).replace(/[^\d.]/g, "")) || 0);
@@ -2578,16 +2570,16 @@ async function handleFkAmount(uid, chatId, text, methodId, promptMsgId, userMsgI
     if(promptMsgId) {
       await tg("editMessageText",{
         chat_id:chatId, message_id:promptMsgId,
-        text:`вќЊ ${tx.fk_min(minRub)}\n\n${tx.fk_enter}`,
+        text:`❌ ${tx.fk_min(minRub)}\n\n${tx.fk_enter}`,
         parse_mode:"HTML",
-        reply_markup:{inline_keyboard:[[{text:"вќЊ РћС‚РјРµРЅР°",callback_data:`cancel:topup_fk:${methodId}`}]]},
+        reply_markup:{inline_keyboard:[[{text:"❌ Отмена",callback_data:`cancel:topup_fk:${methodId}`}]]},
       }).catch(()=>{});
     }
     return;
   }
   if (!serverIp) {
     delMsg(chatId, promptMsgId);
-    await tg("sendMessage", { chat_id: chatId, text: "вќЊ Р’РЅРµС€РЅРёР№ IP РЅРµ РѕРїСЂРµРґРµР»РµРЅ. РџРµСЂРµР·Р°РїСѓСЃС‚РёС‚Рµ Р±РѕС‚Р°." });
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Внешний IP не определен. Перезапустите бота." });
     return;
   }
   clearUserState(uid);
@@ -2597,19 +2589,19 @@ async function handleFkAmount(uid, chatId, text, methodId, promptMsgId, userMsgI
   try {
     order = await createFkOrder({ uid, amountRub: amount, methodId, email, ip: serverIp });
   } catch (e) {
-    await tg("sendMessage", { chat_id: chatId, text: "вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ СЃС‡С‘С‚. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ." });
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Не удалось создать счёт. Попробуйте позже." });
     return;
   }
   if (!order.location) {
-    await tg("sendMessage", { chat_id: chatId, text: "вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ СЃСЃС‹Р»РєСѓ РѕРїР»Р°С‚С‹. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ." });
+    await tg("sendMessage", { chat_id: chatId, text: "❌ Не удалось получить ссылку оплаты. Попробуйте позже." });
     return;
   }
   const fkId = createFkPaymentRow(uid, amount, Number(methodId), order.paymentId, order.location, order.orderId);
   const msgText = [
     tx.fk_created,
     "",
-    `РЎСѓРјРјР°: <b>${rub(amount)}</b>`,
-    `РњРµС‚РѕРґ: <b>${esc(methodTitle(methodId, getLang(uid)))}</b>`,
+    `Сумма: <b>${rub(amount)}</b>`,
+    `Метод: <b>${esc(methodTitle(methodId, getLang(uid)))}</b>`,
     "",
     tx.fk_steps,
     tx.fk_wait,
@@ -2621,7 +2613,7 @@ async function handleFkAmount(uid, chatId, text, methodId, promptMsgId, userMsgI
     disable_web_page_preview: true,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "рџ’і РћРїР»Р°С‚РёС‚СЊ", url: order.location }],
+        [{ text: "💳 Оплатить", url: order.location }],
         [{ text: tx.btn_check, callback_data: `fk:check:${fkId}` }],
         [{ text: tx.btn_cancel, callback_data: `fk:cancel:${fkId}` }],
       ],
@@ -2629,9 +2621,9 @@ async function handleFkAmount(uid, chatId, text, methodId, promptMsgId, userMsgI
   });
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Admin state handler
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function handleAdminState(msg) {
   const aid=Number(msg.from?.id||0); if(!isAdmin(aid)) return false;
   const row=getAdminState(aid); if(!row) return false;
@@ -2644,66 +2636,66 @@ async function handleAdminState(msg) {
 
   switch(row.state){
     case "db_import_wait":
-      if(!msg.document?.file_id){await tg("sendMessage",{chat_id:chatId,text:"Р–РґСѓ С„Р°Р№Р» SQLite РґРѕРєСѓРјРµРЅС‚РѕРј."});return true;}
+      if(!msg.document?.file_id){await tg("sendMessage",{chat_id:chatId,text:"Жду файл SQLite документом."});return true;}
       try{
-        await tg("sendMessage",{chat_id:chatId,text:"вЏі РџСЂРѕРІРµСЂСЏСЋ С„Р°Р№Р»..."});
+        await tg("sendMessage",{chat_id:chatId,text:"⏳ Проверяю файл..."});
         const tmp=await downloadImportFile(msg.document.file_id);
         clearAdminState(aid);
-        await tg("sendMessage",{chat_id:chatId,text:"вњ… РџРµСЂРµР·Р°РїСѓСЃРєР°СЋ Р±РѕС‚Р° СЃ РЅРѕРІРѕР№ Р±Р°Р·РѕР№..."});
+        await tg("sendMessage",{chat_id:chatId,text:"✅ Перезапускаю бота с новой базой..."});
         setTimeout(()=>restartBotWithFile(tmp),500);
-      }catch(e){await tg("sendMessage",{chat_id:chatId,text:`вќЊ РћС€РёР±РєР°: ${e.message}`});}
+      }catch(e){await tg("sendMessage",{chat_id:chatId,text:`❌ Ошибка: ${e.message}`});}
       return true;
 
     case "tariff_price": {
-      const n=Number(text); if(!Number.isFinite(n)||n<=0){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ С†РµРЅСѓ > 0."});return true;}
+      const n=Number(text); if(!Number.isFinite(n)||n<=0){await tg("sendMessage",{chat_id:chatId,text:"Введите цену > 0."});return true;}
       db.prepare("UPDATE tariffs SET price_rub=? WHERE code=?").run(Math.round(n),row.payload);
       clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… Р¦РµРЅР°: ${rub(Math.round(n))}`});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Цена: ${rub(Math.round(n))}`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_tariffs"); return true;
     }
     case "dev_extra_price": {
       const n=Number(text);
-      if(!Number.isFinite(n)||n<0){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ С‡РёСЃР»Рѕ >= 0."});return true;}
+      if(!Number.isFinite(n)||n<0){await tg("sendMessage",{chat_id:chatId,text:"Введите число >= 0."});return true;}
       setSetting("devices_extra_price",String(Math.round(n))); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… Р¦РµРЅР° Р·Р° РґРѕРї. СѓСЃС‚СЂРѕР№СЃС‚РІРѕ: ${rub(Math.round(n))}`});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Цена за доп. устройство: ${rub(Math.round(n))}`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_tariffs"); return true;
     }
     case "gif": {
-      const v=msg.animation?.file_id||msg.video?.file_id||text; if(!v){await tg("sendMessage",{chat_id:chatId,text:"РћС‚РїСЂР°РІСЊС‚Рµ GIF."});return true;}
+      const v=msg.animation?.file_id||msg.video?.file_id||text; if(!v){await tg("sendMessage",{chat_id:chatId,text:"Отправьте GIF."});return true;}
       setSetting(row.payload,v); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"вњ… GIF СЃРѕС…СЂР°РЅС‘РЅ."});
+      await tg("sendMessage",{chat_id:chatId,text:"✅ GIF сохранён."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_gif"); return true;
     }
     case "section_img": {
       const v=msg.photo?msg.photo[msg.photo.length-1].file_id:(msg.document?.file_id||text);
-      if(!v){await tg("sendMessage",{chat_id:chatId,text:"РћС‚РїСЂР°РІСЊС‚Рµ С„РѕС‚Рѕ РёР»Рё file_id."});return true;}
+      if(!v){await tg("sendMessage",{chat_id:chatId,text:"Отправьте фото или file_id."});return true;}
       setSetting(`img_${row.payload}`,v); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… РР·РѕР±СЂР°Р¶РµРЅРёРµ РґР»СЏ В«${row.payload}В» СЃРѕС…СЂР°РЅРµРЅРѕ.`});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Изображение для «${row.payload}» сохранено.`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_imgs"); return true;
     }
     case "section_img_clear": {
       delSetting(`img_${row.payload}`); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"вњ… РР·РѕР±СЂР°Р¶РµРЅРёРµ СѓРґР°Р»РµРЅРѕ."});
+      await tg("sendMessage",{chat_id:chatId,text:"✅ Изображение удалено."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_imgs"); return true;
     }
     case "edit_link": {
       const urlVal=text.trim();
       const validUrl=!urlVal||urlVal==="-"||urlVal.startsWith("http")||urlVal.startsWith("@")||urlVal.startsWith("t.me/");
-      if(!validUrl){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ URL (https://...), @username, t.me/... РёР»Рё В«-В» РґР»СЏ РѕС‡РёСЃС‚РєРё."});return true;}
+      if(!validUrl){await tg("sendMessage",{chat_id:chatId,text:"Введите URL (https://...), @username, t.me/... или «-» для очистки."});return true;}
       if(urlVal==="-"||urlVal==="") delSetting(row.payload);
       else setSetting(row.payload,urlVal);
       clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"вњ… РЎСЃС‹Р»РєР° РѕР±РЅРѕРІР»РµРЅР°."});
+      await tg("sendMessage",{chat_id:chatId,text:"✅ Ссылка обновлена."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_links"); return true;
     }
     case "guide_text":
       setSetting("guide_text",text); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"вњ… РРЅСЃС‚СЂСѓРєС†РёСЏ (RU) РѕР±РЅРѕРІР»РµРЅР°."});
+      await tg("sendMessage",{chat_id:chatId,text:"✅ Инструкция (RU) обновлена."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_guide_edit"); return true;
 
     case "guide_text_en":
       setSetting("guide_text_en",text); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"вњ… Guide (EN) updated."});
+      await tg("sendMessage",{chat_id:chatId,text:"✅ Guide (EN) updated."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_guide_edit"); return true;
 
     case "broadcast": {
@@ -2716,40 +2708,40 @@ async function handleAdminState(msg) {
       setAdminState(aid,"broadcast_preview",meta);
       const total=db.prepare("SELECT COUNT(*) c FROM users").get()?.c||0;
       // Show preview with confirm/cancel
-      await tg("sendMessage",{chat_id:chatId,text:`рџ‘† <b>РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РІС‹С€Рµ.</b>\n\nР Р°Р·РѕСЃР»Р°С‚СЊ <b>${total}</b> РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј?`,parse_mode:"HTML",reply_markup:{inline_keyboard:[
-        [{text:`рџ“Ё Р Р°Р·РѕСЃР»Р°С‚СЊ ${total} РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј`,callback_data:"a:bs_confirm"}],
-        [{text:"вњЏпёЏ РР·РјРµРЅРёС‚СЊ",callback_data:"a:bs"}],
-        [{text:"вќЊ РћС‚РјРµРЅР°",callback_data:"a:bs_cancel"}],
+      await tg("sendMessage",{chat_id:chatId,text:`👆 <b>Предпросмотр выше.</b>\n\nРазослать <b>${total}</b> пользователям?`,parse_mode:"HTML",reply_markup:{inline_keyboard:[
+        [{text:`📨 Разослать ${total} пользователям`,callback_data:"a:bs_confirm"}],
+        [{text:"✏️ Изменить",callback_data:"a:bs"}],
+        [{text:"❌ Отмена",callback_data:"a:bs_cancel"}],
       ]}});
       return true;
     }
     case "broadcast_preview": {
-      // Admin sent another message while preview is pending вЂ” treat it as new broadcast content.
+      // Admin sent another message while preview is pending — treat it as new broadcast content.
       // The previous preview confirmation message stays (user can still cancel it).
       clearAdminState(aid);
       const meta=JSON.stringify({chat_id:Number(chatId),message_id:Number(msg.message_id)});
       setAdminState(aid,"broadcast_preview",meta);
       const total=db.prepare("SELECT COUNT(*) c FROM users").get()?.c||0;
-      await tg("sendMessage",{chat_id:chatId,text:`рџ‘† <b>РћР±РЅРѕРІР»С‘РЅ РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ.</b>\n\nР Р°Р·РѕСЃР»Р°С‚СЊ <b>${total}</b> РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј?`,parse_mode:"HTML",reply_markup:{inline_keyboard:[
-        [{text:`рџ“Ё Р Р°Р·РѕСЃР»Р°С‚СЊ ${total} РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј`,callback_data:"a:bs_confirm"}],
-        [{text:"вњЏпёЏ РР·РјРµРЅРёС‚СЊ",callback_data:"a:bs"}],
-        [{text:"вќЊ РћС‚РјРµРЅР°",callback_data:"a:bs_cancel"}],
+      await tg("sendMessage",{chat_id:chatId,text:`👆 <b>Обновлён предпросмотр.</b>\n\nРазослать <b>${total}</b> пользователям?`,parse_mode:"HTML",reply_markup:{inline_keyboard:[
+        [{text:`📨 Разослать ${total} пользователям`,callback_data:"a:bs_confirm"}],
+        [{text:"✏️ Изменить",callback_data:"a:bs"}],
+        [{text:"❌ Отмена",callback_data:"a:bs_cancel"}],
       ]}});
       return true;
     }
     case "ref_percent": {
-      const n=Number(text); if(!Number.isFinite(n)||n<0||n>100){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ 0..100."});return true;}
+      const n=Number(text); if(!Number.isFinite(n)||n<0||n>100){await tg("sendMessage",{chat_id:chatId,text:"Введите 0..100."});return true;}
       setSetting("ref_percent",Math.round(n)); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… РЎС‚Р°РІРєР°: ${Math.round(n)}%`});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Ставка: ${Math.round(n)}%`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_ref"); return true;
     }
 
     case "bal_add": {
       const targetId=Number(row.payload), n=Number(text);
-      if(!Number.isFinite(n)){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ С‡РёСЃР»Рѕ."});return true;}
+      if(!Number.isFinite(n)){await tg("sendMessage",{chat_id:chatId,text:"Введите число."});return true;}
       const nb=updateBalance(targetId,n); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… Р‘Р°Р»Р°РЅСЃ <code>${targetId}</code>: ${rub(nb)}`,parse_mode:"HTML"});
-      if(n>0) tg("sendMessage",{chat_id:targetId,text:`<b>Р‘Р°Р»Р°РЅСЃ РїРѕРїРѕР»РЅРµРЅ РЅР° ${rub(n)}</b>\n\n<blockquote>РўРµРєСѓС‰РёР№ Р±Р°Р»Р°РЅСЃ: ${rub(nb)}</blockquote>`,parse_mode:"HTML"}).catch(()=>{});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Баланс <code>${targetId}</code>: ${rub(nb)}`,parse_mode:"HTML"});
+      if(n>0) tg("sendMessage",{chat_id:targetId,text:`<b>Баланс пополнен на ${rub(n)}</b>\n\n<blockquote>Текущий баланс: ${rub(nb)}</blockquote>`,parse_mode:"HTML"}).catch(()=>{});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_user_info",{id:targetId}); return true;
     }
     case "find_user": {
@@ -2757,7 +2749,7 @@ async function handleAdminState(msg) {
       let found=null;
       if(/^\d+$/.test(text)) found=user(Number(text));
       if(!found) found=db.prepare("SELECT * FROM users WHERE username=?").get(text.replace(/^@/,""));
-      if(!found){await tg("sendMessage",{chat_id:chatId,text:"вќЊ РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ."});return true;}
+      if(!found){await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден."});return true;}
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_user_info",{id:found.tg_id}); return true;
     }
     case "gift_recipient_id": {
@@ -2768,7 +2760,7 @@ async function handleAdminState(msg) {
       if(/^\d+$/.test(text)) found=user(Number(text));
       if(!found&&text.startsWith("@")) found=db.prepare("SELECT * FROM users WHERE username=?").get(text.slice(1));
       if(!found){
-        await tg("sendMessage",{chat_id:chatId,text:"вќЊ РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ РІ Р±РѕС‚Рµ."});
+        await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден в боте."});
         return true;
       }
       // Route through the standard confirm screen
@@ -2780,10 +2772,10 @@ async function handleAdminState(msg) {
       const val = text.trim();
       if(val==="-"||val==="") {
         delSetting("channel_id");
-        await tg("sendMessage",{chat_id:chatId,text:"вњ… РљР°РЅР°Р» РѕС‚РєР»СЋС‡С‘РЅ."});
+        await tg("sendMessage",{chat_id:chatId,text:"✅ Канал отключён."});
       } else {
         setSetting("channel_id", val);
-        await tg("sendMessage",{chat_id:chatId,text:`вњ… РљР°РЅР°Р» СѓСЃС‚Р°РЅРѕРІР»РµРЅ: <code>${esc(val)}</code>`,parse_mode:"HTML"});
+        await tg("sendMessage",{chat_id:chatId,text:`✅ Канал установлен: <code>${esc(val)}</code>`,parse_mode:"HTML"});
       }
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_channel"); return true;
     }
@@ -2792,59 +2784,59 @@ async function handleAdminState(msg) {
       const val = text.trim();
       if(val==="-"||val==="") {
         delSetting("channel_invite_url");
-        await tg("sendMessage",{chat_id:chatId,text:"вњ… РЎСЃС‹Р»РєР° РѕС‡РёС‰РµРЅР°."});
+        await tg("sendMessage",{chat_id:chatId,text:"✅ Ссылка очищена."});
       } else {
         setSetting("channel_invite_url", val);
-        await tg("sendMessage",{chat_id:chatId,text:`вњ… РЎСЃС‹Р»РєР° СЃРѕС…СЂР°РЅРµРЅР°.`,parse_mode:"HTML"});
+        await tg("sendMessage",{chat_id:chatId,text:`✅ Ссылка сохранена.`,parse_mode:"HTML"});
       }
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_channel"); return true;
     }
     case "trial_days": {
       const n = parseInt(text,10);
-      if(!Number.isFinite(n)||n<1||n>365){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ С‡РёСЃР»Рѕ РѕС‚ 1 РґРѕ 365."});return true;}
+      if(!Number.isFinite(n)||n<1||n>365){await tg("sendMessage",{chat_id:chatId,text:"Введите число от 1 до 365."});return true;}
       setSetting("trial_days",String(n)); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… Р”Р»РёС‚РµР»СЊРЅРѕСЃС‚СЊ: ${n} РґРЅ.`});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Длительность: ${n} дн.`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_channel"); return true;
     }
     case "fk_shop_id": {
       const n = parseInt(text, 10);
-      if(!Number.isFinite(n) || n <= 0){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ РєРѕСЂСЂРµРєС‚РЅС‹Р№ shop_id (> 0)."});return true;}
+      if(!Number.isFinite(n) || n <= 0){await tg("sendMessage",{chat_id:chatId,text:"Введите корректный shop_id (> 0)."});return true;}
       setSetting("fk_shop_id", String(n)); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… shop_id: <code>${n}</code>`,parse_mode:"HTML"});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ shop_id: <code>${n}</code>`,parse_mode:"HTML"});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_fk"); return true;
     }
     case "fk_min_rub": {
       const n = parseInt(text, 10);
-      if(!Number.isFinite(n) || n < 1){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ РјРёРЅРёРјР°Р»СЊРЅСѓСЋ СЃСѓРјРјСѓ (С†РµР»РѕРµ С‡РёСЃР»Рѕ >= 1)."});return true;}
+      if(!Number.isFinite(n) || n < 1){await tg("sendMessage",{chat_id:chatId,text:"Введите минимальную сумму (целое число >= 1)."});return true;}
       setSetting("fk_min_rub", String(n)); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… min amount: <code>${n}</code>`,parse_mode:"HTML"});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ min amount: <code>${n}</code>`,parse_mode:"HTML"});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_fk"); return true;
     }
     case "fk_notify_path": {
       let p = text.trim();
-      if(!p){await tg("sendMessage",{chat_id:chatId,text:"Р’РІРµРґРёС‚Рµ РїСѓС‚СЊ webhook, РЅР°РїСЂРёРјРµСЂ /freekassa/notify"});return true;}
+      if(!p){await tg("sendMessage",{chat_id:chatId,text:"Введите путь webhook, например /freekassa/notify"});return true;}
       if(p==="-"||p==="default") p = "/freekassa/notify";
       if(!p.startsWith("/")) p = `/${p}`;
       p = p.replace(/\s+/g, "");
       setSetting("fk_notify_path", p); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… webhook path: <code>${esc(p)}</code>`,parse_mode:"HTML"});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ webhook path: <code>${esc(p)}</code>`,parse_mode:"HTML"});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_fk"); return true;
     }
 
     case "promo_add": {
       const parts = text.trim().split(/\s+/);
-      if (parts.length < 2) { await tg("sendMessage",{chat_id:chatId,text:"РќРµРІРµСЂРЅС‹Р№ С„РѕСЂРјР°С‚. РџСЂРёРјРµСЂ: SALE10 10 100"}); return true; }
+      if (parts.length < 2) { await tg("sendMessage",{chat_id:chatId,text:"Неверный формат. Пример: SALE10 10 100"}); return true; }
       const promoCode = parts[0].toUpperCase();
       const pct = parseInt(parts[1], 10);
       const maxUses = parts[2] ? parseInt(parts[2], 10) : 0;
-      if (!promoCode || isNaN(pct) || pct < 1 || pct > 99) { await tg("sendMessage",{chat_id:chatId,text:"РЎРєРёРґРєР° РґРѕР»Р¶РЅР° Р±С‹С‚СЊ РѕС‚ 1 РґРѕ 99%"}); return true; }
+      if (!promoCode || isNaN(pct) || pct < 1 || pct > 99) { await tg("sendMessage",{chat_id:chatId,text:"Скидка должна быть от 1 до 99%"}); return true; }
       try {
         db.prepare("INSERT INTO promo_codes(code,discount_pct,uses_max,uses_current,is_active,created_at) VALUES(?,?,?,0,1,?) ON CONFLICT(code) DO UPDATE SET discount_pct=excluded.discount_pct,uses_max=excluded.uses_max,is_active=1")
           .run(promoCode, pct, maxUses||0, now());
         clearAdminState(aid);
-        await tg("sendMessage",{chat_id:chatId,text:`вњ… РџСЂРѕРјРѕРєРѕРґ <code>${esc(promoCode)}</code> вЂ” <b>${pct}%</b> (РјР°РєСЃ. ${maxUses||"в€ћ"})`,parse_mode:"HTML"});
+        await tg("sendMessage",{chat_id:chatId,text:`✅ Промокод <code>${esc(promoCode)}</code> — <b>${pct}%</b> (макс. ${maxUses||"∞"})`,parse_mode:"HTML"});
         await render(aid,chatId,user(aid)?.last_menu_id||null,"a_promo");
-      } catch(e) { await tg("sendMessage",{chat_id:chatId,text:`вќЊ РћС€РёР±РєР°: ${e.message}`}); }
+      } catch(e) { await tg("sendMessage",{chat_id:chatId,text:`❌ Ошибка: ${e.message}`}); }
       return true;
     }
 
@@ -2852,17 +2844,17 @@ async function handleAdminState(msg) {
       const code = text.trim().toUpperCase();
       const res = db.prepare("UPDATE promo_codes SET is_active=0 WHERE code=? COLLATE NOCASE").run(code);
       clearAdminState(aid);
-      if (res.changes) await tg("sendMessage",{chat_id:chatId,text:`вњ… РџСЂРѕРјРѕРєРѕРґ <code>${esc(code)}</code> РґРµР°РєС‚РёРІРёСЂРѕРІР°РЅ.`,parse_mode:"HTML"});
-      else await tg("sendMessage",{chat_id:chatId,text:"вќЊ РџСЂРѕРјРѕРєРѕРґ РЅРµ РЅР°Р№РґРµРЅ."});
+      if (res.changes) await tg("sendMessage",{chat_id:chatId,text:`✅ Промокод <code>${esc(code)}</code> деактивирован.`,parse_mode:"HTML"});
+      else await tg("sendMessage",{chat_id:chatId,text:"❌ Промокод не найден."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_promo"); return true;
     }
   } // end switch
   return false;
 } // end handleAdminState
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Message handler
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function handleMessage(msg) {
   const from=msg.from||{}, chatId=Number(msg.chat?.id||0);
   if(!chatId||!from.id) return;
@@ -2872,14 +2864,14 @@ async function handleMessage(msg) {
   const text=String(msg.text||"").trim();
   const userMsgId=Number(msg.message_id||0);
 
-  // в”Ђв”Ђ Admin state takes priority вЂ” MUST be before any user-state deletion в”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Admin state takes priority — MUST be before any user-state deletion ─────
   // If admin is in an admin-state flow (broadcast, tariff edit, etc.) we must
   // handle the message immediately without touching it.  Placing this before the
   // user-state delete block prevents broadcast content from being wiped when the
   // admin also happens to have a stale user_state.
   if(isAdmin(from.id) && await handleAdminState(msg)) return;
 
-  // в”Ђв”Ђ Delete the user's raw message only when they are in a user input state в”Ђв”Ђ
+  // ── Delete the user's raw message only when they are in a user input state ──
   if(ustate) delMsg(chatId, userMsgId);
 
   // Universal /cancel command
@@ -2938,7 +2930,7 @@ async function handleMessage(msg) {
     if(/^\d+$/.test(text)) found=user(Number(text));
     if(!found&&text.startsWith("@")) found=db.prepare("SELECT * FROM users WHERE username=?").get(text.slice(1));
     if(!found){
-      await tg("sendMessage",{chat_id:chatId,text:"вќЊ РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ. РџРѕРїСЂРѕСЃРёС‚Рµ РµРіРѕ РЅР°Р¶Р°С‚СЊ /start."});
+      await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не найден. Попросите его нажать /start."});
       return;
     }
     await askGiftConfirm(from.id, chatId, user(from.id)?.last_menu_id||null, code, found.tg_id, null);
@@ -2952,32 +2944,32 @@ async function handleMessage(msg) {
     const recipientId=Number(msg.user_shared.user_id||0);
     clearUserState(from.id);
     delMsg(chatId, promptMsgId);
-    if(!user(recipientId)){await tg("sendMessage",{chat_id:chatId,text:"вќЊ РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅ. РџРѕРїСЂРѕСЃРёС‚Рµ РЅР°Р¶Р°С‚СЊ /start."});return;}
+    if(!user(recipientId)){await tg("sendMessage",{chat_id:chatId,text:"❌ Пользователь не зарегистрирован. Попросите нажать /start."});return;}
     await askGiftConfirm(from.id, chatId, user(from.id)?.last_menu_id||null, code, recipientId, null);
     return;
   }
 
-  // в”Ђв”Ђ Admin commands в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Admin commands ────────────────────────────────────────────────────────
   if(isAdmin(from.id)){
     if(text.startsWith("/add_balance")){
       const p=text.split(/\s+/);
-      if(p.length!==3){await tg("sendMessage",{chat_id:chatId,text:"Р¤РѕСЂРјР°С‚: /add_balance &lt;id&gt; &lt;amount&gt;",parse_mode:"HTML"});return;}
+      if(p.length!==3){await tg("sendMessage",{chat_id:chatId,text:"Формат: /add_balance &lt;id&gt; &lt;amount&gt;",parse_mode:"HTML"});return;}
       const tid=Number(p[1]),amt=Number(p[2]);
-      if(!user(tid)||!Number.isFinite(amt)){await tg("sendMessage",{chat_id:chatId,text:"РќРµРІРµСЂРЅС‹Рµ РїР°СЂР°РјРµС‚СЂС‹."});return;}
+      if(!user(tid)||!Number.isFinite(amt)){await tg("sendMessage",{chat_id:chatId,text:"Неверные параметры."});return;}
       const nb=updateBalance(tid,amt);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… Р‘Р°Р»Р°РЅСЃ <code>${p[1]}</code>: <b>${rub(nb)}</b>`,parse_mode:"HTML"}); return;
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Баланс <code>${p[1]}</code>: <b>${rub(nb)}</b>`,parse_mode:"HTML"}); return;
     }
   }
 
-  // в”Ђв”Ђ Non-command plain text вЂ” just reply, do NOT silently delete в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Non-command plain text — just reply, do NOT silently delete ─────────────
   // (Admins sending free-form text in an unexpected state should see feedback,
   //  not have their message vanish without explanation.)
   if(!text.startsWith("/")){
-    await tg("sendMessage",{chat_id:chatId,text:"РСЃРїРѕР»СЊР·СѓР№С‚Рµ /start"});
+    await tg("sendMessage",{chat_id:chatId,text:"Используйте /start"});
     return;
   }
 
-  // Standard /commands вЂ” delete the command message for a clean look
+  // Standard /commands — delete the command message for a clean look
   delMsg(chatId, userMsgId);
   if(text.startsWith("/start")){
     const m=text.match(/^\/start\s+partner_([a-zA-Z0-9]+)$/);
@@ -3011,12 +3003,12 @@ async function handleMessage(msg) {
   if(text==="/admin"&&isAdmin(from.id)){await render(from.id,chatId,user(from.id)?.last_menu_id,"a_main");return;}
 
   // Unknown /command
-  await tg("sendMessage",{chat_id:chatId,text:"РќРµРёР·РІРµСЃС‚РЅР°СЏ РєРѕРјР°РЅРґР°. РСЃРїРѕР»СЊР·СѓР№С‚Рµ /start",parse_mode:"HTML"});
+  await tg("sendMessage",{chat_id:chatId,text:"Неизвестная команда. Используйте /start",parse_mode:"HTML"});
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Callback handler
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function handleCallback(q) {
   const data=q.data||"", uid=Number(q.from?.id||0), chatId=Number(q.message?.chat?.id||0), msgId=Number(q.message?.message_id||0);
   if(!uid||!chatId||!msgId) return;
@@ -3030,7 +3022,7 @@ async function handleCallback(q) {
 
   if(data==="noop"){await ans();return;}
 
-  // в”Ђв”Ђ Input cancel buttons в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Input cancel buttons ──────────────────────────────────────────────────
   if(data.startsWith("cancel:")){
     const ustate=getUserState(uid);
     clearUserState(uid);
@@ -3042,7 +3034,7 @@ async function handleCallback(q) {
     if(sub2==="topup_crypto"||sub2==="topup_fk"){
       await render(uid,chatId,user(uid)?.last_menu_id||null,"topup");
     } else if(sub2==="promo"){
-      // Return to buy confirm вЂ” extract code/mode/devices from cancel data
+      // Return to buy confirm — extract code/mode/devices from cancel data
       // format: cancel:promo:CODE:MODE:DEVICES
       const parts=data.split(":");
       const code=parts[2],mode=parts[3],devices=Number(parts[4]||3);
@@ -3055,30 +3047,30 @@ async function handleCallback(q) {
     return;
   }
 
-  // в”Ђв”Ђ Channel gate check в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Channel gate check ────────────────────────────────────────────────────
   if(data==="gate:check"){
     const member=await checkChannelMembership(uid);
     if(!member){
-      await ans(getLang(uid)==="en"?"вќ— You haven't subscribed yet.":"вќ— Р’С‹ РµС‰С‘ РЅРµ РїРѕРґРїРёСЃР°Р»РёСЃСЊ.",true);
+      await ans(getLang(uid)==="en"?"❗ You haven't subscribed yet.":"❗ Вы ещё не подписались.",true);
       return;
     }
-    // Passed вЂ” delete gate message and show main menu
+    // Passed — delete gate message and show main menu
     await tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
     await gif(chatId,"gif_main_menu");
     await render(uid,chatId,null,"home");
     await ans(); return;
   }
 
-  // в”Ђв”Ђ Channel gate: enforce for all remaining callbacks в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Channel gate: enforce for all remaining callbacks ────────────────────
   if(!isAdmin(uid)){
     const _gPassed=await enforceChannelGate(uid,chatId,getLang(uid));
     if(!_gPassed){ await ans(); return; }
   }
 
-  // в”Ђв”Ђ Trial period в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Trial period ──────────────────────────────────────────────────────────
   if(data==="trial:start"){
     const tx=T(uid);
-    if(!trialEnabled()){await ans(getLang(uid)==="en"?"Trial not available.":"РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ РЅРµРґРѕСЃС‚СѓРїРµРЅ.",true);return;}
+    if(!trialEnabled()){await ans(getLang(uid)==="en"?"Trial not available.":"Пробный период недоступен.",true);return;}
     if(hasUsedTrial(uid)){await ans(tx.trial_used_msg,true);return;}
     if(activeSub(sub(uid))){await ans(tx.trial_has_sub,true);return;}
     const days=trialDays();
@@ -3093,27 +3085,27 @@ async function handleCallback(q) {
   }
   if(data==="trial:confirm"){
     const tx=T(uid);
-    if(!trialEnabled()){await ans(getLang(uid)==="en"?"Trial not available.":"РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ РЅРµРґРѕСЃС‚СѓРїРµРЅ.",true);return;}
+    if(!trialEnabled()){await ans(getLang(uid)==="en"?"Trial not available.":"Пробный период недоступен.",true);return;}
     if(hasUsedTrial(uid)){await ans(tx.trial_used_msg,true);return;}
     if(activeSub(sub(uid))){await ans(tx.trial_has_sub,true);return;}
     await ans();
     try{
       await doTrial(uid,chatId,msgId);
     }catch(e){
-      await tg("sendMessage",{chat_id:chatId,text:`вќЊ ${e.message}`}).catch(()=>{});
+      await tg("sendMessage",{chat_id:chatId,text:`❌ ${e.message}`}).catch(()=>{});
     }
     return;
   }
-  if(data.startsWith("a:")&&!isAdmin(uid)){await ans("РќРµС‚ РґРѕСЃС‚СѓРїР°.",true);return;}
+  if(data.startsWith("a:")&&!isAdmin(uid)){await ans("Нет доступа.",true);return;}
 
-  // в”Ђв”Ђ Language в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Language ──────────────────────────────────────────────────────────────
   if(data.startsWith("lang:")){
     const lg=data.split(":")[1];
     if(lg==="ru"||lg==="en"){setLang(uid,lg);}
     await render(uid,chatId,msgId,"lang"); await ans(); return;
   }
 
-  // в”Ђв”Ђ Navigation в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Navigation ────────────────────────────────────────────────────────────
   const navMap={
     "v:home":"home","v:profile":"profile","v:sub":"sub","v:buy":"buy",
     "v:topup":"topup","v:pay_other":"topup","v:ref":"ref","v:guide":"guide",
@@ -3121,8 +3113,8 @@ async function handleCallback(q) {
   };
   if(navMap[data]){await render(uid,chatId,msgId,navMap[data]);await ans();return;}
 
-  // в”Ђв”Ђ Purchase в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-  // pay:n: в†’ show device selector first
+  // ── Purchase ──────────────────────────────────────────────────────────────
+  // pay:n: → show device selector first
   if(data.startsWith("pay:n:")){
     const code=data.split(":")[2];
     await ans();
@@ -3138,24 +3130,24 @@ async function handleCallback(q) {
     return;
   }
 
-  // в”Ђв”Ђ Device selector callbacks в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Device selector callbacks ─────────────────────────────────────────────
   if(data.startsWith("dev:")){
     const parts=data.split(":");
-    // dev:pay:CODE:MODE:DEVICES в†’ go to confirm
+    // dev:pay:CODE:MODE:DEVICES → go to confirm
     if(parts[1]==="pay"){
       const code=parts[2], mode=parts[3], devices=Number(parts[4]||3);
       await ans();
       await askBuyConfirm(uid,chatId,msgId,code,mode,null,"",0,devices);
       return;
     }
-    // dev:CODE:MODE:DEVICES в†’ update selector (change device count)
+    // dev:CODE:MODE:DEVICES → update selector (change device count)
     const code=parts[1], mode=parts[2], devices=Number(parts[3]||3);
     await ans();
     await showDeviceSelector(uid,chatId,msgId,code,mode,devices);
     return;
   }
 
-  // в”Ђв”Ђ Promo code в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Promo code ────────────────────────────────────────────────────────────
   if(data.startsWith("promo:ask:")){
     const parts=data.split(":"), code=parts[2], mode=parts[3], devices=Number(parts[4]||3);
     await ans();
@@ -3164,18 +3156,18 @@ async function handleCallback(q) {
     return;
   }
 
-  // в”Ђв”Ђ Direct payment (pending order) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Direct payment (pending order) ────────────────────────────────────────
   if(data.startsWith("direct:crypto:")){
-    if(!CRYPTOBOT_TOKEN){await ans("CryptoBot РЅРµ РЅР°СЃС‚СЂРѕРµРЅ.",true);return;}
+    if(!CRYPTOBOT_TOKEN){await ans("CryptoBot не настроен.",true);return;}
     const poId=Number(data.split(":")[2]), po=getPendingOrder(poId);
-    if(!po||po.tg_id!==uid||po.status!=="pending"){await ans(getLang(uid)==="en"?"Order expired. Please start again.":"Р—Р°РєР°Р· РёСЃС‚С‘Рє. РќР°С‡РЅРёС‚Рµ Р·Р°РЅРѕРІРѕ.",true);return;}
-    const tr=tariff(po.tariff_code); if(!tr){await ans("РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ.",true);return;}
+    if(!po||po.tg_id!==uid||po.status!=="pending"){await ans(getLang(uid)==="en"?"Order expired. Please start again.":"Заказ истёк. Начните заново.",true);return;}
+    const tr=tariff(po.tariff_code); if(!tr){await ans("Тариф не найден.",true);return;}
     const devCount=Number(po.devices||3)||3;
     const finalPrice=calcPriceWithDevices(tr.price_rub,po.promo_pct,devCount);
     await ans();
     expireOldCryptoPayments(uid);
     const inv=await createCryptoInvoice(finalPrice);
-    if(!inv){await tg("sendMessage",{chat_id:chatId,text:"вќЊ CryptoBot РЅРµРґРѕСЃС‚СѓРїРµРЅ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ."});return;}
+    if(!inv){await tg("sendMessage",{chat_id:chatId,text:"❌ CryptoBot недоступен. Попробуйте позже."});return;}
     const cpId=createCryptoPaymentRow(uid,finalPrice,inv.amountUsdt,inv.rate,inv.invoiceId,inv.payUrl);
     const tx=T(uid);
     const msgText=[tx.crypto_inv,"",tx.crypto_sum(rub(finalPrice),inv.amountUsdt),tx.crypto_rate(inv.rate),"",tx.crypto_steps,"",tx.crypto_ttl].join("\n");
@@ -3187,57 +3179,57 @@ async function handleCallback(q) {
     return;
   }
   if(data.startsWith("direct:fk:")){
-    if(!isFkEnabled()){await ans("РЎРїРѕСЃРѕР± РїРѕРїРѕР»РЅРµРЅРёСЏ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ.",true);return;}
+    if(!isFkEnabled()){await ans("Способ пополнения временно недоступен.",true);return;}
     const parts=data.split(":"), poId=Number(parts[2]), methodId=Number(parts[3]||44);
     const po=getPendingOrder(poId);
-    if(!po||po.tg_id!==uid||po.status!=="pending"){await ans(getLang(uid)==="en"?"Order expired. Please start again.":"Р—Р°РєР°Р· РёСЃС‚С‘Рє. РќР°С‡РЅРёС‚Рµ Р·Р°РЅРѕРІРѕ.",true);return;}
-    const tr=tariff(po.tariff_code); if(!tr){await ans("РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ.",true);return;}
+    if(!po||po.tg_id!==uid||po.status!=="pending"){await ans(getLang(uid)==="en"?"Order expired. Please start again.":"Заказ истёк. Начните заново.",true);return;}
+    const tr=tariff(po.tariff_code); if(!tr){await ans("Тариф не найден.",true);return;}
     const devCount=Number(po.devices||3)||3;
     const finalPrice=calcPriceWithDevices(tr.price_rub,po.promo_pct,devCount);
     const serverIp=fkServerIp();
-    if(!serverIp){await ans("Р’РЅРµС€РЅРёР№ IP РЅРµ РѕРїСЂРµРґРµР»С‘РЅ.",true);return;}
+    if(!serverIp){await ans("Внешний IP не определён.",true);return;}
     await ans();
     const email=`user${uid}@${FK_EMAIL_DOMAIN}`;
     let order;
     try { order=await createFkOrder({uid,amountRub:finalPrice,methodId,email,ip:serverIp}); }
-    catch(e){await tg("sendMessage",{chat_id:chatId,text:"вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ СЃС‡С‘С‚. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ."});return;}
-    if(!order.location){await tg("sendMessage",{chat_id:chatId,text:"вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ СЃСЃС‹Р»РєСѓ РѕРїР»Р°С‚С‹."});return;}
+    catch(e){await tg("sendMessage",{chat_id:chatId,text:"❌ Не удалось создать счёт. Попробуйте позже."});return;}
+    if(!order.location){await tg("sendMessage",{chat_id:chatId,text:"❌ Не удалось получить ссылку оплаты."});return;}
     const fkId=createFkPaymentRow(uid,finalPrice,methodId,order.paymentId,order.location,order.orderId,poId);
     // Link this FK payment to the pending order via payment_id comment stored in po
     const tx=T(uid);
-    const msgText=[tx.fk_created,"",`РЎСѓРјРјР°: <b>${rub(finalPrice)}</b>`,`РњРµС‚РѕРґ: <b>${esc(methodTitle(methodId,getLang(uid)))}</b>`,"",tx.fk_steps,tx.fk_wait].join("\n");
+    const msgText=[tx.fk_created,"",`Сумма: <b>${rub(finalPrice)}</b>`,`Метод: <b>${esc(methodTitle(methodId,getLang(uid)))}</b>`,"",tx.fk_steps,tx.fk_wait].join("\n");
     await tg("sendMessage",{chat_id:chatId,text:msgText,parse_mode:"HTML",disable_web_page_preview:true,reply_markup:{inline_keyboard:[
-      [{text:"рџ’і РћРїР»Р°С‚РёС‚СЊ",url:order.location}],
+      [{text:"💳 Оплатить",url:order.location}],
       [{text:tx.btn_check,callback_data:`fk:check:${fkId}`}],
       [{text:tx.btn_cancel,callback_data:`fk:cancel:${fkId}`}],
     ]}});
     return;
   }
 
-  // в”Ђв”Ђ Purchase history в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Purchase history ──────────────────────────────────────────────────────
   if(data.startsWith("ph:")){await render(uid,chatId,msgId,"purchases",{page:Number(data.split(":")[1]||0)});await ans();return;}
 
-  // в”Ђв”Ђ Subscription в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Subscription ──────────────────────────────────────────────────────────
   // sub:copy removed (guide button replaces it)
   if(data==="sub:qr"){
     const s=sub(uid);
-    if(!activeSub(s)){await ans(getLang(uid)==="en"?"No active subscription.":"РќРµС‚ Р°РєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРё.",true);return;}
+    if(!activeSub(s)){await ans(getLang(uid)==="en"?"No active subscription.":"Нет активной подписки.",true);return;}
     await ans();
     const tx=T(uid);
     try {
-      // Generate QR locally вЂ” no external service, works with any URL length
+      // Generate QR locally — no external service, works with any URL length
       const buf = await QRCode.toBuffer(s.sub_url, { width: 512, margin: 2, errorCorrectionLevel: "M" });
       await sendPhotoBuffer(chatId, buf, "image/png", tx.sub_qr_caption, null);
     } catch(e) {
       console.error("[QR]", e.message);
-      await tg("sendMessage",{chat_id:chatId,text:getLang(uid)==="en"?"вќЊ QR generation failed. Use the link above.":"вќЊ РќРµ СѓРґР°Р»РѕСЃСЊ СЃРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ QR-РєРѕРґ. РСЃРїРѕР»СЊР·СѓР№С‚Рµ СЃСЃС‹Р»РєСѓ РІС‹С€Рµ."}).catch(()=>{});
+      await tg("sendMessage",{chat_id:chatId,text:getLang(uid)==="en"?"❌ QR generation failed. Use the link above.":"❌ Не удалось сгенерировать QR-код. Используйте ссылку выше."}).catch(()=>{});
     }
     return;
   }
 
-  // в”Ђв”Ђ Referral в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-  // ref:i removed вЂ” link shown inline in refText
-  // ref:share removed вЂ” invite uses t.me/share/url URL button
+  // ── Referral ──────────────────────────────────────────────────────────────
+  // ref:i removed — link shown inline in refText
+  // ref:share removed — invite uses t.me/share/url URL button
   if(data==="ref:r"){
     // Show confirmation before changing code
     const isRu=getLang(uid)==="ru";
@@ -3251,21 +3243,21 @@ async function handleCallback(q) {
   }
   if(data==="ref:r:yes"){
     db.prepare("UPDATE users SET ref_code=?,updated_at=? WHERE tg_id=?").run(crypto.randomBytes(5).toString("hex"),now(),uid);
-    await render(uid,chatId,msgId,"ref"); await ans("вњ…"); return;
+    await render(uid,chatId,msgId,"ref"); await ans("✅"); return;
   }
-  // ref:p removed вЂ” no payout settings needed
-  // ref:pm: removed вЂ” no payout method needed
+  // ref:p removed — no payout settings needed
+  // ref:pm: removed — no payout method needed
   if(data.startsWith("ref:hist:")){await render(uid,chatId,msgId,"ref_hist",{page:Number(data.split(":")[2]||0)});await ans();return;}
-  // ref:w removed вЂ” referral rewards go to main balance directly
+  // ref:w removed — referral rewards go to main balance directly
 
-  // в”Ђв”Ђ Gifts в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Gifts ─────────────────────────────────────────────────────────────────
   if(data.startsWith("g:p:")){
     const code=data.split(":")[2],tr=tariff(code),u=user(uid),tx=T(uid);
-    if(!tr){await ans("РўР°СЂРёС„ РЅРµ РЅР°Р№РґРµРЅ.",true);return;}
+    if(!tr){await ans("Тариф не найден.",true);return;}
     if(Number(u.balance_rub)<Number(tr.price_rub)){await ans(tx.gift_no_bal(tr.price_rub,u.balance_rub),true);return;}
     await ans();
     const lang=getLang(uid);
-    const promptText=`рџЋЃ <b>${esc(tariffTitle(tr,lang))}</b>\n\n${tx.gift_enter_id}`;
+    const promptText=`🎁 <b>${esc(tariffTitle(tr,lang))}</b>\n\n${tx.gift_enter_id}`;
     const promptId = await sendPrompt(chatId, promptText, `cancel:gift:${code}`);
     setUserState(uid,"gift_recipient_id",`${code}:${promptId}`);
     return;
@@ -3278,31 +3270,31 @@ async function handleCallback(q) {
   }
   // g:id: handler merged into g:p: flow above
 
-  // в”Ђв”Ђ Crypto topup в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Crypto topup ──────────────────────────────────────────────────────────
   if(data==="topup:crypto"){
-    if(!CRYPTOBOT_TOKEN){await ans("CryptoBot РЅРµ РЅР°СЃС‚СЂРѕРµРЅ.",true);return;}
+    if(!CRYPTOBOT_TOKEN){await ans("CryptoBot не настроен.",true);return;}
     await ans(); await startCryptoTopup(uid,chatId); return;
   }
   if(data.startsWith("fk:start:")){
-    if(!isFkEnabled()){await ans("РЎРїРѕСЃРѕР± РїРѕРїРѕР»РЅРµРЅРёСЏ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ.",true);return;}
+    if(!isFkEnabled()){await ans("Способ пополнения временно недоступен.",true);return;}
     const methodId=Number(data.split(":")[2]||44);
-    if(![44,36,43].includes(methodId)){await ans("РќРµРІРµСЂРЅС‹Р№ РјРµС‚РѕРґ РѕРїР»Р°С‚С‹.",true);return;}
+    if(![44,36,43].includes(methodId)){await ans("Неверный метод оплаты.",true);return;}
     await ans();
     await startFkTopup(uid,chatId,methodId);
     return;
   }
   if(data.startsWith("cp:check:")){
     const cpId=Number(data.split(":")[2]), cp=getCryptoPayment(cpId);
-    if(!cp||cp.tg_id!==uid){await ans("РЎС‡С‘С‚ РЅРµ РЅР°Р№РґРµРЅ.",true);return;}
-    if(cp.status==="paid"){await ans("вњ… РЈР¶Рµ Р·Р°С‡РёСЃР»РµРЅРѕ!",true);return;}
-    if(cp.status!=="pending"){await ans("РЎС‡С‘С‚ Р·Р°РєСЂС‹С‚. РЎРѕР·РґР°Р№С‚Рµ РЅРѕРІС‹Р№.",true);return;}
-    await ans("вЏі РџСЂРѕРІРµСЂСЏСЋ...");
+    if(!cp||cp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(cp.status==="paid"){await ans("✅ Уже зачислено!",true);return;}
+    if(cp.status!=="pending"){await ans("Счёт закрыт. Создайте новый.",true);return;}
+    await ans("⏳ Проверяю...");
     const paid=await checkCryptoInvoice(cp.invoice_id);
     if(paid){
       markCryptoPaid(cpId);
       updateBalance(uid,cp.amount_rub);
       const me=user(uid), tx=T(uid);
-      tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Crypto РїРѕРїРѕР»РЅРµРЅРёРµ</b>`,"",`${esc(me.first_name||String(uid))} (<code>${uid}</code>)`,`РЎСѓРјРјР°: <b>${rub(cp.amount_rub)}</b>  (${cp.amount_usdt} USDT @ ${Number(cp.rate_rub).toFixed(2)} в‚Ѕ)`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
+      tg("sendMessage",{chat_id:ADMIN_ID,text:[`<b>Crypto пополнение</b>`,"",`${esc(me.first_name||String(uid))} (<code>${uid}</code>)`,`Сумма: <b>${rub(cp.amount_rub)}</b>  (${cp.amount_usdt} USDT @ ${Number(cp.rate_rub).toFixed(2)} ₽)`].join("\n"),parse_mode:"HTML"}).catch(()=>{});
       // Auto-complete pending order if exists
       const po=getPendingOrderByUser(uid);
       if(po){
@@ -3314,7 +3306,7 @@ async function handleCallback(q) {
     }else{
       await tg("sendMessage",{
         chat_id:chatId,
-        text:"вќЊ РћРїР»Р°С‚Р° РїРѕРєР° РЅРµ РЅР°Р№РґРµРЅР°. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїСЂРѕРІРµСЂРёС‚СЊ СЃРЅРѕРІР° С‡РµСЂРµР· РјРёРЅСѓС‚Сѓ.",
+        text:"❌ Оплата пока не найдена. Попробуйте проверить снова через минуту.",
         reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`cp:check:${cpId}`}],[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}
       }).catch(()=>{});
     }
@@ -3322,36 +3314,36 @@ async function handleCallback(q) {
   }
   if(data.startsWith("cp:cancel:")){
     const cpId=Number(data.split(":")[2]), cp=getCryptoPayment(cpId);
-    if(!cp||cp.tg_id!==uid){await ans("РЎС‡С‘С‚ РЅРµ РЅР°Р№РґРµРЅ.",true);return;}
-    if(cp.status!=="pending"){await ans("РЎС‡С‘С‚ СѓР¶Рµ Р·Р°РєСЂС‹С‚.",true);return;}
+    if(!cp||cp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(cp.status!=="pending"){await ans("Счёт уже закрыт.",true);return;}
     markCryptoCancelled(cpId);
     // Also cancel any pending purchase order for this user
     const po=getPendingOrderByUser(uid);
     if(po) closePendingOrder(po.id,"cancelled");
-    await ans("РћС‚РјРµРЅРµРЅРѕ.");
+    await ans("Отменено.");
     await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
     return;
   }
   if(data.startsWith("fk:check:")){
     const fpId=Number(data.split(":")[2]), fp=getFkPayment(fpId);
-    if(!fp||fp.tg_id!==uid){await ans("РЎС‡С‘С‚ РЅРµ РЅР°Р№РґРµРЅ.",true);return;}
-    if(fp.status==="paid"){await ans("вњ… РЈР¶Рµ Р·Р°С‡РёСЃР»РµРЅРѕ!",true);return;}
-    if(fp.status!=="pending"){await ans("РЎС‡С‘С‚ Р·Р°РєСЂС‹С‚. РЎРѕР·РґР°Р№С‚Рµ РЅРѕРІС‹Р№.",true);return;}
-    await ans("вЏі РџСЂРѕРІРµСЂСЏСЋ...");
+    if(!fp||fp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(fp.status==="paid"){await ans("✅ Уже зачислено!",true);return;}
+    if(fp.status!=="pending"){await ans("Счёт закрыт. Создайте новый.",true);return;}
+    await ans("⏳ Проверяю...");
     try{
       const ord=await checkFkOrderByPaymentId(fp.payment_id);
       const paidStatus=ord && (Number(ord.status)===1 || String(ord.status||"").toLowerCase()==="paid");
       if(!paidStatus){
         await tg("sendMessage",{
           chat_id:chatId,
-          text:"вќЊ РћРїР»Р°С‚Р° РїРѕРєР° РЅРµ РЅР°Р№РґРµРЅР°. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїСЂРѕРІРµСЂРёС‚СЊ СЃРЅРѕРІР° С‡РµСЂРµР· РјРёРЅСѓС‚Сѓ.",
+          text:"❌ Оплата пока не найдена. Попробуйте проверить снова через минуту.",
           reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`fk:check:${fpId}`}],[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}
         }).catch(()=>{});
         return;
       }
       const credit=await creditFkPaymentByPaymentId(fp.payment_id, ord.id || ord.orderId || null, ord.amount || null);
       if(!credit.ok&&credit.reason==="WRONG_AMOUNT"){
-        await tg("answerCallbackQuery",{callback_query_id:q.id,text:"вќЊ РЎСѓРјРјР° РїР»Р°С‚РµР¶Р° РЅРµ СЃРѕРІРїР°РґР°РµС‚.",show_alert:true}).catch(()=>{});
+        await tg("answerCallbackQuery",{callback_query_id:q.id,text:"❌ Сумма платежа не совпадает.",show_alert:true}).catch(()=>{});
         return;
       }
       // Auto-complete pending order if exists
@@ -3364,14 +3356,14 @@ async function handleCallback(q) {
         await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.fk_ok(fp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
       }
     }catch(e){
-      await tg("answerCallbackQuery",{callback_query_id:q.id,text:`вќЊ ${String(e.message||"РћС€РёР±РєР° РїСЂРѕРІРµСЂРєРё")}`.slice(0,200),show_alert:true}).catch(()=>{});
+      await tg("answerCallbackQuery",{callback_query_id:q.id,text:`❌ ${String(e.message||"Ошибка проверки")}`.slice(0,200),show_alert:true}).catch(()=>{});
     }
     return;
   }
   if(data.startsWith("fk:cancel:")){
     const fpId=Number(data.split(":")[2]), fp=getFkPayment(fpId);
-    if(!fp||fp.tg_id!==uid){await ans("РЎС‡С‘С‚ РЅРµ РЅР°Р№РґРµРЅ.",true);return;}
-    if(fp.status!=="pending"){await ans("РЎС‡С‘С‚ СѓР¶Рµ Р·Р°РєСЂС‹С‚.",true);return;}
+    if(!fp||fp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
+    if(fp.status!=="pending"){await ans("Счёт уже закрыт.",true);return;}
     markFkCancelled(fpId);
     // Cancel the specific pending order this FK payment was created for,
     // or fall back to the user's current pending order.
@@ -3381,16 +3373,16 @@ async function handleCallback(q) {
       const po=getPendingOrderByUser(uid);
       if(po) closePendingOrder(po.id,"cancelled");
     }
-    await ans("РћС‚РјРµРЅРµРЅРѕ.");
+    await ans("Отменено.");
     await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
     return;
   }
 
-  // в”Ђв”Ђ Admin nav в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Admin nav ─────────────────────────────────────────────────────────────
   const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_main","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk","a:promo":"a_promo"};
   if(adminNav[data]){await render(uid,chatId,msgId,adminNav[data]);await ans();return;}
 
-  // Cancel admin input вЂ” delete the prompt message and return to admin main
+  // Cancel admin input — delete the prompt message and return to admin main
   if(data==="a:cancel_admin"){
     clearAdminState(uid);
     await tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
@@ -3400,59 +3392,59 @@ async function handleCallback(q) {
   // Dynamic admin nav with data params
   if(data.startsWith("a:users:")){await render(uid,chatId,msgId,"a_users",{page:Number(data.split(":")[2]||0)});await ans();return;}
 
-  // в”Ђв”Ђ Channel / trial admin actions в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Channel / trial admin actions ─────────────────────────────────────────
   if(data==="a:chan_id"){
     setAdminState(uid,"chan_id","");
-    await sendPrompt(chatId,`РўРµРєСѓС‰РёР№ РєР°РЅР°Р»: <code>${esc(setting("channel_id","") || "РЅРµ Р·Р°РґР°РЅ")}</code>\n\nР’РІРµРґРёС‚Рµ @username РёР»Рё С‡РёСЃР»РѕРІРѕР№ ID РєР°РЅР°Р»Р°\n(РЅР°РїСЂРёРјРµСЂ <code>@dreinnvpn</code> РёР»Рё <code>-1001234567890</code>).\nР”Р»СЏ РѕС‚РєР»СЋС‡РµРЅРёСЏ РІРІРµРґРёС‚Рµ В«-В».`,"a:cancel_admin");
+    await sendPrompt(chatId,`Текущий канал: <code>${esc(setting("channel_id","") || "не задан")}</code>\n\nВведите @username или числовой ID канала\n(например <code>@dreinnvpn</code> или <code>-1001234567890</code>).\nДля отключения введите «-».`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:chan_url"){
     setAdminState(uid,"chan_url","");
-    await sendPrompt(chatId,`РўРµРєСѓС‰Р°СЏ СЃСЃС‹Р»РєР°: <code>${esc(setting("channel_invite_url","") || "РЅРµ Р·Р°РґР°РЅР°")}</code>\n\nР’РІРµРґРёС‚Рµ СЃСЃС‹Р»РєСѓ-РїСЂРёРіР»Р°С€РµРЅРёРµ (https://t.me/+...) РёР»Рё В«-В» РґР»СЏ РѕС‡РёСЃС‚РєРё.`,"a:cancel_admin");
+    await sendPrompt(chatId,`Текущая ссылка: <code>${esc(setting("channel_invite_url","") || "не задана")}</code>\n\nВведите ссылку-приглашение (https://t.me/+...) или «-» для очистки.`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:trial_toggle"){
     const next=trialEnabled()?"0":"1";
     setSetting("trial_enabled",next);
-    await ans(next==="1"?"вњ… РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ РІРєР»СЋС‡С‘РЅ":"вќЊ РџСЂРѕР±РЅС‹Р№ РїРµСЂРёРѕРґ РѕС‚РєР»СЋС‡С‘РЅ");
+    await ans(next==="1"?"✅ Пробный период включён":"❌ Пробный период отключён");
     await render(uid,chatId,msgId,"a_channel"); return;
   }
   if(data==="a:trial_days"){
     setAdminState(uid,"trial_days","");
-    await sendPrompt(chatId,`РўРµРєСѓС‰Р°СЏ РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ: <b>${trialDays()} РґРЅ.</b>\n\nР’РІРµРґРёС‚Рµ РЅРѕРІРѕРµ Р·РЅР°С‡РµРЅРёРµ (1..365):`,"a:cancel_admin");
+    await sendPrompt(chatId,`Текущая длительность: <b>${trialDays()} дн.</b>\n\nВведите новое значение (1..365):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:fk_shop"){
     setAdminState(uid,"fk_shop_id","");
-    await sendPrompt(chatId,`РўРµРєСѓС‰РёР№ shop_id: <code>${fkShopId() || "РЅРµ Р·Р°РґР°РЅ"}</code>\n\nР’РІРµРґРёС‚Рµ РЅРѕРІС‹Р№ shop_id (С‡РёСЃР»Рѕ > 0):`,"a:cancel_admin");
+    await sendPrompt(chatId,`Текущий shop_id: <code>${fkShopId() || "не задан"}</code>\n\nВведите новый shop_id (число > 0):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:fk_min"){
     setAdminState(uid,"fk_min_rub","");
-    await sendPrompt(chatId,`РўРµРєСѓС‰РёР№ min amount: <code>${fkMinRub()}</code>\n\nР’РІРµРґРёС‚Рµ РЅРѕРІСѓСЋ РјРёРЅРёРјР°Р»СЊРЅСѓСЋ СЃСѓРјРјСѓ (РІ СЂСѓР±Р»СЏС…):`,"a:cancel_admin");
+    await sendPrompt(chatId,`Текущий min amount: <code>${fkMinRub()}</code>\n\nВведите новую минимальную сумму (в рублях):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:fk_path"){
     setAdminState(uid,"fk_notify_path","");
-    await sendPrompt(chatId,`РўРµРєСѓС‰РёР№ webhook path: <code>${esc(fkNotifyPath())}</code>\n\nР’РІРµРґРёС‚Рµ РЅРѕРІС‹Р№ РїСѓС‚СЊ (РЅР°РїСЂРёРјРµСЂ /freekassa/notify):`,"a:cancel_admin");
+    await sendPrompt(chatId,`Текущий webhook path: <code>${esc(fkNotifyPath())}</code>\n\nВведите новый путь (например /freekassa/notify):`,"a:cancel_admin");
     await ans(); return;
   }
 
-  // в”Ђв”Ђ Admin edit triggers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Admin edit triggers ───────────────────────────────────────────────────
   if(data.startsWith("a:te:")){
     const code=data.split(":")[2],tr=tariff(code);
     setAdminState(uid,"tariff_price",code);
-    await sendPrompt(chatId,`В«${esc(tr?.title||code)}В» вЂ” ${rub(tr?.price_rub||0)}\n\nР’РІРµРґРёС‚Рµ РЅРѕРІСѓСЋ С†РµРЅСѓ (в‚Ѕ):`,"a:cancel_admin");
+    await sendPrompt(chatId,`«${esc(tr?.title||code)}» — ${rub(tr?.price_rub||0)}\n\nВведите новую цену (₽):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:dev_price"){
     setAdminState(uid,"dev_extra_price","");
-    await sendPrompt(chatId,`РўРµРєСѓС‰Р°СЏ С†РµРЅР° Р·Р° РґРѕРї. СѓСЃС‚СЂРѕР№СЃС‚РІРѕ (РѕС‚ 4+): <b>${rub(devicesExtraPrice())}</b>\n\nР’РІРµРґРёС‚Рµ РЅРѕРІСѓСЋ С†РµРЅСѓ РІ СЂСѓР±Р»СЏС… (0 = Р±РµСЃРїР»Р°С‚РЅРѕ):`,"a:cancel_admin");
+    await sendPrompt(chatId,`Текущая цена за доп. устройство (от 4+): <b>${rub(devicesExtraPrice())}</b>\n\nВведите новую цену в рублях (0 = бесплатно):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data.startsWith("a:ge:")){
     setAdminState(uid,"gif",data.split(":")[2]);
-    await sendPrompt(chatId,"РћС‚РїСЂР°РІСЊС‚Рµ GIF РёР»Рё file_id."         ,"a:cancel_admin");
+    await sendPrompt(chatId,"Отправьте GIF или file_id."         ,"a:cancel_admin");
     await ans(); return;
   }
   // Section image set
@@ -3461,39 +3453,39 @@ async function handleCallback(q) {
     const hasImg=!!viewImg(viewKey);
     setAdminState(uid,"section_img",viewKey);
     const rows=[];
-    if(hasImg) rows.push([{text:"рџ—‘ РЈРґР°Р»РёС‚СЊ РёР·РѕР±СЂР°Р¶РµРЅРёРµ",callback_data:`a:img_del:${viewKey}`}]);
-    rows.push([{text:"В« РћС‚РјРµРЅР°",callback_data:"a:cancel_admin"}]);
-    await tg("sendMessage",{chat_id:chatId,text:`РР·РѕР±СЂР°Р¶РµРЅРёРµ РґР»СЏ СЂР°Р·РґРµР»Р° В«<b>${viewKey}</b>В».\n\nРћС‚РїСЂР°РІСЊС‚Рµ С„РѕС‚Рѕ РёР»Рё file_id.`,parse_mode:"HTML",reply_markup:{inline_keyboard:rows}});
+    if(hasImg) rows.push([{text:"🗑 Удалить изображение",callback_data:`a:img_del:${viewKey}`}]);
+    rows.push([{text:"« Отмена",callback_data:"a:cancel_admin"}]);
+    await tg("sendMessage",{chat_id:chatId,text:`Изображение для раздела «<b>${viewKey}</b>».\n\nОтправьте фото или file_id.`,parse_mode:"HTML",reply_markup:{inline_keyboard:rows}});
     await ans(); return;
   }
   if(data.startsWith("a:img_del:")){
     const viewKey=data.split(":")[2];
     delSetting(`img_${viewKey}`);
-    await ans("вњ… РЈРґР°Р»РµРЅРѕ.");
+    await ans("✅ Удалено.");
     await render(uid,chatId,msgId,"a_imgs"); return;
   }
   // Link edit
   if(data.startsWith("a:lnk:")){
     const key=data.split(":").slice(2).join(":");
     setAdminState(uid,"edit_link",key);
-    await sendPrompt(chatId,`РЎСЃС‹Р»РєР° В«<b>${key.replace("url_","")}</b>В»:\n<code>${esc(setting(key))}</code>\n\nР’РІРµРґРёС‚Рµ РЅРѕРІС‹Р№ URL (РёР»Рё В«-В» РґР»СЏ РѕС‡РёСЃС‚РєРё):`,"a:cancel_admin");
+    await sendPrompt(chatId,`Ссылка «<b>${key.replace("url_","")}</b>»:\n<code>${esc(setting(key))}</code>\n\nВведите новый URL (или «-» для очистки):`,"a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:bs"){
-    const promptId = await sendPrompt(chatId,"рџ“Ё РћС‚РїСЂР°РІСЊС‚Рµ СЃРѕРѕР±С‰РµРЅРёРµ РґР»СЏ СЂР°СЃСЃС‹Р»РєРё.\n\nРџРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ: С‚РµРєСЃС‚ (СЃ С„РѕСЂРјР°С‚РёСЂРѕРІР°РЅРёРµРј Telegram), С„РѕС‚Рѕ, РІРёРґРµРѕ, GIF, РґРѕРєСѓРјРµРЅС‚, РіРѕР»РѕСЃРѕРІРѕРµ.","a:cancel_admin");
+    const promptId = await sendPrompt(chatId,"📨 Отправьте сообщение для рассылки.\n\nПоддерживается: текст (с форматированием Telegram), фото, видео, GIF, документ, голосовое.","a:cancel_admin");
     setAdminState(uid,"broadcast",String(promptId));
     await ans(); return;
   }
   if(data==="a:bs_confirm"){
     const row=getAdminState(uid);
-    if(!row||row.state!=="broadcast_preview"){await ans("РќРµС‚ РґР°РЅРЅС‹С… РґР»СЏ СЂР°СЃСЃС‹Р»РєРё.",true);return;}
+    if(!row||row.state!=="broadcast_preview"){await ans("Нет данных для рассылки.",true);return;}
     clearAdminState(uid);
     let msgMeta;
-    try{ msgMeta=JSON.parse(row.payload); }catch{ await ans("РћС€РёР±РєР° РґР°РЅРЅС‹С….",true); return; }
-    await ans("вЏі Р—Р°РїСѓСЃРєР°СЋ СЂР°СЃСЃС‹Р»РєСѓ...");
+    try{ msgMeta=JSON.parse(row.payload); }catch{ await ans("Ошибка данных.",true); return; }
+    await ans("⏳ Запускаю рассылку...");
     const ids=db.prepare("SELECT tg_id FROM users").all();
     let ok=0,fail=0;
-    const progMsg=await tg("sendMessage",{chat_id:chatId,text:`рџ“Ё 0/${ids.length}`}).catch(()=>null);
+    const progMsg=await tg("sendMessage",{chat_id:chatId,text:`📨 0/${ids.length}`}).catch(()=>null);
     for(let i=0;i<ids.length;i++){
       const toId=ids[i].tg_id;
       try{
@@ -3501,28 +3493,28 @@ async function handleCallback(q) {
         ok++;
       }catch{fail++;}
       await sleep(35);
-      if(progMsg&&(i+1)%20===0) tg("editMessageText",{chat_id:chatId,message_id:progMsg.message_id,text:`рџ“Ё ${i+1}/${ids.length}`}).catch(()=>{});
+      if(progMsg&&(i+1)%20===0) tg("editMessageText",{chat_id:chatId,message_id:progMsg.message_id,text:`📨 ${i+1}/${ids.length}`}).catch(()=>{});
     }
-    await tg("sendMessage",{chat_id:chatId,text:`рџ“Ё Р Р°СЃСЃС‹Р»РєР° Р·Р°РІРµСЂС€РµРЅР°\nвњ… ${ok}  вќЊ ${fail}`,parse_mode:"HTML"});
+    await tg("sendMessage",{chat_id:chatId,text:`📨 Рассылка завершена\n✅ ${ok}  ❌ ${fail}`,parse_mode:"HTML"});
     await render(uid,chatId,user(uid)?.last_menu_id||null,"a_bcast"); return;
   }
   if(data==="a:bs_cancel"){
     clearAdminState(uid);
-    await ans("РћС‚РјРµРЅРµРЅРѕ.");
+    await ans("Отменено.");
     await render(uid,chatId,msgId,"a_bcast"); return;
   }
-  if(data==="a:guide_ru"){setAdminState(uid,"guide_text","");await sendPrompt(chatId,"рџ‡·рџ‡є РћС‚РїСЂР°РІСЊС‚Рµ С‚РµРєСЃС‚ РёРЅСЃС‚СЂСѓРєС†РёРё РЅР° СЂСѓСЃСЃРєРѕРј.\nР¤РѕСЂРјР°С‚ СЃСЃС‹Р»РѕРє: [РќР°Р·РІР°РЅРёРµ|URL]","a:cancel_admin");await ans();return;}
-  if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await sendPrompt(chatId,"рџ‡¬рџ‡§ Send the guide text in English.\nLink format: [Label|URL]","a:cancel_admin");await ans();return;}
-  if(data==="a:pe"){await ans("Р Р°Р·РґРµР» СѓРґР°Р»РµРЅ.",true);await render(uid,chatId,msgId,"a_main");return;}
-  if(data==="a:rp"){setAdminState(uid,"ref_percent","");await sendPrompt(chatId,`РЎС‚Р°РІРєР°: ${setting("ref_percent","30")}%\n\nР’РІРµРґРёС‚Рµ РЅРѕРІСѓСЋ (0..100):`,"a:cancel_admin");await ans();return;}
+  if(data==="a:guide_ru"){setAdminState(uid,"guide_text","");await sendPrompt(chatId,"🇷🇺 Отправьте текст инструкции на русском.\nФормат ссылок: [Название|URL]","a:cancel_admin");await ans();return;}
+  if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await sendPrompt(chatId,"🇬🇧 Send the guide text in English.\nLink format: [Label|URL]","a:cancel_admin");await ans();return;}
+  if(data==="a:pe"){await ans("Раздел удален.",true);await render(uid,chatId,msgId,"a_main");return;}
+  if(data==="a:rp"){setAdminState(uid,"ref_percent","");await sendPrompt(chatId,`Ставка: ${setting("ref_percent","30")}%\n\nВведите новую (0..100):`,"a:cancel_admin");await ans();return;}
 
-  if(data==="a:find"){setAdminState(uid,"find_user","");await sendPrompt(chatId,"Р’РІРµРґРёС‚Рµ Telegram ID РёР»Рё @username:","a:cancel_admin");await ans();return;}
+  if(data==="a:find"){setAdminState(uid,"find_user","");await sendPrompt(chatId,"Введите Telegram ID или @username:","a:cancel_admin");await ans();return;}
   // DB
-  if(data==="a:db_export"){await ans("Р¤РѕСЂРјРёСЂСѓСЋ С„Р°Р№Р»...");await exportDbToAdmin(chatId);return;}
-  if(data==="a:db_import_start"){setAdminState(uid,"db_import_wait","");await ans("Р–РґСѓ С„Р°Р№Р» .db/.sqlite");await tg("sendMessage",{chat_id:chatId,text:"рџ“¤ РћС‚РїСЂР°РІСЊС‚Рµ SQLite С„Р°Р№Р» РґРѕРєСѓРјРµРЅС‚РѕРј.\nвљ пёЏ Р‘РѕС‚ РїРµСЂРµР·Р°РїСѓСЃС‚РёС‚СЃСЏ РїРѕСЃР»Рµ РёРјРїРѕСЂС‚Р°."});return;}
+  if(data==="a:db_export"){await ans("Формирую файл...");await exportDbToAdmin(chatId);return;}
+  if(data==="a:db_import_start"){setAdminState(uid,"db_import_wait","");await ans("Жду файл .db/.sqlite");await tg("sendMessage",{chat_id:chatId,text:"📤 Отправьте SQLite файл документом.\n⚠️ Бот перезапустится после импорта."});return;}
   // Withdrawal callbacks removed
   // Balance add
-  // в”Ђв”Ђ Admin user info: grant sub в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Admin user info: grant sub ────────────────────────────────────────────
   if(data.startsWith("a:user_back:")){
     const targetId=Number(data.split(":")[2]);
     await render(uid,chatId,msgId,"a_user_info",{id:targetId}); await ans(); return;
@@ -3533,63 +3525,63 @@ async function handleCallback(q) {
   }
   if(data.startsWith("a:grant_ok:")){
     const parts=data.split(":"), targetId=Number(parts[2]), tariffCode=parts[3];
-    await ans("вЏі Р’С‹РґР°СЋ РїРѕРґРїРёСЃРєСѓ...");
+    await ans("⏳ Выдаю подписку...");
     try {
       const res = await adminGrantSub(uid, targetId, tariffCode, chatId, msgId);
-      await tg("sendMessage",{chat_id:chatId,text:`вњ… РџРѕРґРїРёСЃРєР° В«${esc(res.plan)}В» РІС‹РґР°РЅР° ${esc(res.name)}`,parse_mode:"HTML"});
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Подписка «${esc(res.plan)}» выдана ${esc(res.name)}`,parse_mode:"HTML"});
     } catch(e) {
-      await tg("sendMessage",{chat_id:chatId,text:`вќЊ РћС€РёР±РєР°: ${e.message}`});
+      await tg("sendMessage",{chat_id:chatId,text:`❌ Ошибка: ${e.message}`});
     }
     await render(uid,chatId,user(uid)?.last_menu_id||null,"a_user_info",{id:Number(data.split(":")[2])}); return;
   }
 
-  // в”Ђв”Ђ Admin promo management в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ── Admin promo management ────────────────────────────────────────────────
   if(data==="a:promo_add"){
     setAdminState(uid,"promo_add","");
-    await sendPrompt(chatId,"Р’РІРµРґРёС‚Рµ РїСЂРѕРјРѕРєРѕРґ РІ С„РѕСЂРјР°С‚Рµ:\n<code>РљРћР” РЎРљРР”РљРђ% [РњРђРљРЎ_РРЎРџРћР›Р¬Р—РћР’РђРќРР™]</code>\n\nРџСЂРёРјРµСЂ: <code>SALE10 10 100</code>\n(0 = Р±РµР· РѕРіСЂР°РЅРёС‡РµРЅРёР№)","a:cancel_admin");
+    await sendPrompt(chatId,"Введите промокод в формате:\n<code>КОД СКИДКА% [МАКС_ИСПОЛЬЗОВАНИЙ]</code>\n\nПример: <code>SALE10 10 100</code>\n(0 = без ограничений)","a:cancel_admin");
     await ans(); return;
   }
   if(data==="a:promo_del"){
     setAdminState(uid,"promo_deactivate","");
-    await sendPrompt(chatId,"Р’РІРµРґРёС‚Рµ РєРѕРґ РїСЂРѕРјРѕРєРѕРґР° РґР»СЏ РґРµР°РєС‚РёРІР°С†РёРё:","a:cancel_admin");
+    await sendPrompt(chatId,"Введите код промокода для деактивации:","a:cancel_admin");
     await ans(); return;
   }
 
   if(data.startsWith("a:bal_add:")){
     const targetId=data.split(":")[2], tu=user(Number(targetId));
     setAdminState(uid,"bal_add",targetId); await ans();
-    await sendPrompt(chatId,`РџРѕРїРѕР»РЅРµРЅРёРµ РґР»СЏ ${esc(tu?.first_name||targetId)}\nР‘Р°Р»Р°РЅСЃ: ${rub(tu?.balance_rub)}\n\nР’РІРµРґРёС‚Рµ СЃСѓРјРјСѓ (РѕС‚СЂРёС†Р°С‚РµР»СЊРЅР°СЏ = СЃРїРёСЃР°РЅРёРµ):`,"a:cancel_admin"); return;
+    await sendPrompt(chatId,`Пополнение для ${esc(tu?.first_name||targetId)}\nБаланс: ${rub(tu?.balance_rub)}\n\nВведите сумму (отрицательная = списание):`,"a:cancel_admin"); return;
   }
   // Sub revoke: deactivate subscription immediately
   if(data.startsWith("a:sub_revoke:")){
     const targetId=Number(data.split(":")[2]);
     const ts=sub(targetId);
-    if(!ts||!activeSub(ts)){await ans("РђРєС‚РёРІРЅРѕР№ РїРѕРґРїРёСЃРєРё РЅРµС‚.",true);return;}
+    if(!ts||!activeSub(ts)){await ans("Активной подписки нет.",true);return;}
     // Deactivate: set is_active=0 and expires_at=now so it's expired immediately
     db.prepare("UPDATE subscriptions SET is_active=0,expires_at=?,updated_at=? WHERE tg_id=?")
       .run(now()-1,now(),targetId);
-    await ans("вњ… РџРѕРґРїРёСЃРєР° РѕС‚РѕР·РІР°РЅР°.");
+    await ans("✅ Подписка отозвана.");
     // Notify the user
     const tu=user(targetId);
     const isRuTarget=getLang(targetId)==="ru";
     tg("sendMessage",{
       chat_id:targetId,
       text:isRuTarget
-        ?"<b>Р’Р°С€Р° РїРѕРґРїРёСЃРєР° Р±С‹Р»Р° РґРµР°РєС‚РёРІРёСЂРѕРІР°РЅР° Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂРѕРј.</b>\n\n<i>РЎРІСЏР¶РёС‚РµСЃСЊ СЃ РїРѕРґРґРµСЂР¶РєРѕР№ РґР»СЏ СѓС‚РѕС‡РЅРµРЅРёСЏ РґРµС‚Р°Р»РµР№.</i>"
+        ?"<b>Ваша подписка была деактивирована администратором.</b>\n\n<i>Свяжитесь с поддержкой для уточнения деталей.</i>"
         :"<b>Your subscription has been deactivated by the administrator.</b>\n\n<i>Contact support for details.</i>",
       parse_mode:"HTML",
     }).catch(()=>{});
     await render(uid,chatId,msgId,"a_user_info",{id:targetId}); return;
   }
 
-  await ans("РќРµРёР·РІРµСЃС‚РЅР°СЏ РєРѕРјР°РЅРґР°");
+  await ans("Неизвестная команда");
 }
 
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 // Long-poll
-// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─────────────────────────────────────────────────────────────────────────────
 async function poll() {
-  console.log("рџ¤– VPN Bot Р·Р°РїСѓС‰РµРЅ.");
+  console.log("🤖 VPN Bot запущен.");
   while(true){
     try{
       const ups=await tg("getUpdates",{timeout:30,offset,allowed_updates:["message","callback_query"]});
@@ -3612,7 +3604,7 @@ function startWebhookServer() {
         return;
       }
 
-      // в”Ђв”Ђ Read body (with size limit) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+      // ── Read body (with size limit) ───────────────────────────────────────
       const chunks = [];
       let size = 0;
       let bodyDestroyed = false;
@@ -3638,7 +3630,7 @@ function startWebhookServer() {
       }
       const raw = Buffer.concat(chunks).toString("utf8");
 
-      // в”Ђв”Ђ CryptoBot webhook в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+      // ── CryptoBot webhook ─────────────────────────────────────────────────
       if (req.method === "POST" && url.pathname === CRYPTOBOT_WEBHOOK_PATH) {
         const headerToken = req.headers["crypto-pay-api-token"] || "";
         if (!CRYPTOBOT_TOKEN || !verifyCryptoBotWebhook(raw, headerToken)) {
@@ -3654,7 +3646,7 @@ function startWebhookServer() {
         return;
       }
 
-      // в”Ђв”Ђ FreeKassa webhook в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+      // ── FreeKassa webhook ─────────────────────────────────────────────────
       if (req.method !== "POST" || url.pathname !== fkNotifyPath()) {
         res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("Not found");
@@ -3728,8 +3720,8 @@ function startWebhookServer() {
 
 async function setMyCommands() {
   const commands = [
-    { command: "start", description: "РџРµСЂРµР·Р°РїСѓСЃС‚РёС‚СЊ Р±РѕС‚Р°" },
-    { command: "sub",   description: "РњРѕСЏ РїРѕРґРїРёСЃРєР°" },
+    { command: "start", description: "Перезапустить бота" },
+    { command: "sub",   description: "Моя подписка" },
   ];
   try {
     await tg("setMyCommands", { commands });
@@ -3753,4 +3745,3 @@ boot().catch((e) => {
   console.error("[boot]", e);
   process.exit(1);
 });
-
