@@ -79,6 +79,13 @@ function checkCbRateLimit(uid) {
 process.on("uncaughtException",  e => console.error("[uncaughtException]",  e));
 process.on("unhandledRejection", e => console.error("[unhandledRejection]", e));
 
+// Suppress the harmless "buffer.File is experimental" warning that Node 18
+// emits when native FormData.append() is called with a Blob + filename.
+process.on("warning", (w) => {
+  if (w.name === "ExperimentalWarning" && w.message.includes("buffer.File")) return;
+  console.warn("[warning]", w.name, w.message);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // i18n — Translations
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,7 +324,7 @@ const I18N = {
     btn_qr:         "📷 Subscription QR Code",
     btn_ref_code:   "🔄 Reset ref code",
     ref_code_confirm: "⚠️ <b>Reset referral code?</b>\n\n<i>All old links will stop working.</i>",
-    sub_qr_caption: "📷 <b>Subscription QR Code</b>\n\n<i>Scan with your camera or VPN app to connect.</i>",
+    sub_qr_caption: "📷 <b>Subscription QR Code</b>\n\n<i>Scan with your camera or Dreinn VPN to connect.</i>",
     btn_ref_hist:   "📋 Earnings history",
     btn_support:    "💬 Support",
     btn_privacy:    "🔒 Privacy policy",
@@ -614,6 +621,55 @@ function addReferralReward(buyerId, amount) {
 
 // Withdrawal system removed — ref rewards go directly to main balance
 
+// ── FK auto-expire job (1 h) ──────────────────────────────────────────────────
+// Runs every 5 minutes and expires any pending FK payment that is over 1 hour
+// old. The linked pending purchase order (if any) is also closed so the user
+// can start a fresh payment attempt.
+function startFkExpireJob() {
+  const CHECK_INTERVAL = 5 * 60 * 1000; // every 5 min
+
+  async function checkExpireFk() {
+    try {
+      const cutoff = now() - 3600 * 1000; // 1 hour
+      const stale = db.prepare(
+        "SELECT * FROM freekassa_payments WHERE status='pending' AND created_at<?"
+      ).all(cutoff);
+
+      for (const fp of stale) {
+        // Atomically mark as expired (guard against concurrent webhook credit)
+        const res = db.prepare(
+          "UPDATE freekassa_payments SET status='expired',updated_at=? WHERE id=? AND status='pending'"
+        ).run(now(), fp.id);
+        if (res.changes === 0) continue; // already processed by webhook
+
+        // Cancel the linked pending purchase order
+        if (fp.pending_order_id) {
+          closePendingOrder(fp.pending_order_id, "expired");
+        } else {
+          // Fallback: expire any active pending order for this user
+          const po = getPendingOrderByUser(fp.tg_id);
+          if (po) closePendingOrder(po.id, "expired");
+        }
+
+        // Notify the user
+        const isRu = getLang(fp.tg_id) === "ru";
+        const tx = T(fp.tg_id);
+        tg("sendMessage", {
+          chat_id: fp.tg_id,
+          text: isRu
+            ? `⏰ <b>Счёт истёк</b>\n\nЗаявка на пополнение <b>${rub(fp.amount_rub)}</b>была автоматически отменена — оплата не поступила в течение 1 часа.\n\nЕсли вы оплатили — обратитесь в поддержку.`
+            : `⏰ <b>Invoice expired</b>\n\ninvoice for <b>${rub(fp.amount_rub)}</b> was automatically cancelled — no payment received within 1 hour.\n\nIf you already paid, please contact support.`,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [[{ text: tx.btn_topup, callback_data: "v:topup" }]] },
+        }).catch(() => {});
+      }
+    } catch (e) { console.error("[FkExpireJob]", e.message); }
+  }
+
+  checkExpireFk();
+  setInterval(checkExpireFk, CHECK_INTERVAL);
+}
+
 // ── Expiry notification job ───────────────────────────────────────────────────
 function startExpiryNotificationJob() {
   const CHECK_INTERVAL = 60 * 60 * 1000; // every hour
@@ -684,7 +740,7 @@ async function adminGrantSub(adminId, targetId, tariffCode, chatId, msgId) {
     chat_id:targetId,
     text:[rtx.admin_grant_rcvd(tr.title,tr.duration_days),"",`<code>${esc(subUrl)}</code>`].join("\n"),
     parse_mode:"HTML",
-    reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,url:subUrl}]]},
+    reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,web_app:{url:subUrl}}]]},
   }).catch(()=>{});
   const name = tu.first_name||(tu.username?`@${tu.username}`:`ID ${targetId}`);
   return { name, plan: tr.title };
@@ -775,6 +831,7 @@ function init() {
       method_id      INTEGER NOT NULL,
       payment_id     TEXT    NOT NULL UNIQUE,
       fk_order_id    INTEGER,
+      pending_order_id INTEGER,
       location       TEXT    NOT NULL DEFAULT '',
       status         TEXT    NOT NULL DEFAULT 'pending',
       credited_at    INTEGER,
@@ -925,6 +982,8 @@ function init() {
 
   // Migration: add devices column to subscriptions
   try { db.exec("ALTER TABLE subscriptions ADD COLUMN devices INTEGER NOT NULL DEFAULT 3"); } catch {}
+  // Migration: add pending_order_id column to freekassa_payments
+  try { db.exec("ALTER TABLE freekassa_payments ADD COLUMN pending_order_id INTEGER"); } catch {}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -959,6 +1018,22 @@ async function tgSendFile(method, chatId, fieldName, filePath, extra={}) {
   const r = await fetch(`${TG_BASE}/${method}`,{method:"POST",body:form});
   const j = await r.json().catch(()=>({}));
   if(!r.ok||j.ok===false) throw new Error(j.description||`TG HTTP ${r.status}`);
+  return j.result;
+}
+
+/**
+ * Send a photo from an in-memory Buffer (multipart upload — avoids Telegram
+ * trying to fetch remote URLs which can fail for long QR URLs).
+ */
+async function sendPhotoBuffer(chatId, buffer, mimeType, caption, replyMarkup) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("photo", new Blob([buffer], { type: mimeType || "image/png" }), "photo.png");
+  if (caption)      { form.append("caption", caption); form.append("parse_mode", "HTML"); }
+  if (replyMarkup)  form.append("reply_markup", JSON.stringify(replyMarkup));
+  const r = await fetch(`${TG_BASE}/sendPhoto`, { method: "POST", body: form });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) throw new Error(j.description || `TG HTTP ${r.status}`);
   return j.result;
 }
 
@@ -1110,7 +1185,7 @@ function expireOldCryptoPayments(tgId) {
 }
 
 function expireOldFkPayments(tgId) {
-  const cutoff = now() - 24 * 3600 * 1000; // FK orders expire after 24h
+  const cutoff = now() - 3600 * 1000; // FK orders expire after 1h
   db.prepare("UPDATE freekassa_payments SET status='expired',updated_at=? WHERE tg_id=? AND status='pending' AND created_at<?")
     .run(now(), Number(tgId), cutoff);
 }
@@ -1228,10 +1303,10 @@ async function ensureFkServerIp() {
   console.warn("[FreeKassa] Failed to auto-detect external IP.");
   return "";
 }
-function createFkPaymentRow(tgId, amountRub, methodId, paymentId, location, fkOrderId = null) {
+function createFkPaymentRow(tgId, amountRub, methodId, paymentId, location, fkOrderId = null, pendingOrderId = null) {
   return db
-    .prepare("INSERT INTO freekassa_payments(tg_id,amount_rub,method_id,payment_id,fk_order_id,location,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)")
-    .run(Number(tgId), Math.round(amountRub), Number(methodId), String(paymentId), fkOrderId ? Number(fkOrderId) : null, String(location || ""), now(), now()).lastInsertRowid;
+    .prepare("INSERT INTO freekassa_payments(tg_id,amount_rub,method_id,payment_id,fk_order_id,pending_order_id,location,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?)")
+    .run(Number(tgId), Math.round(amountRub), Number(methodId), String(paymentId), fkOrderId ? Number(fkOrderId) : null, pendingOrderId ? Number(pendingOrderId) : null, String(location || ""), now(), now()).lastInsertRowid;
 }
 function getFkPayment(id) {
   return db.prepare("SELECT * FROM freekassa_payments WHERE id=?").get(Number(id));
@@ -1490,10 +1565,9 @@ async function doTrial(uid, chatId, msgId) {
       .run(Number(uid),"trial",fakeTariff.title,subUrl,exp,now(),now());
     markTrialUsed(uid);
   })();
-  await gif(chatId,"gif_purchase_success");
   const lines=[tx.trial_activated(days),"",`<code>${esc(subUrl)}</code>`];
   const kb={inline_keyboard:[[{text:tx.btn_connect,url:subUrl}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]};
-  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("buy"));
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
   setMenu(uid,chatId,nm);
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1533,7 +1607,6 @@ async function completePurchaseAfterTopup(tgId, po) {
     await doPurchaseWithPromo(tgId, tgId, po.tariff_code, po.kind, po.promo_code, po.promo_pct, devCount);
     const me = user(tgId), tx = T(tgId);
     const s = sub(tgId);
-    await gif(chatId, "gif_purchase_success");
     const lang = getLang(tgId);
     const lines = [tx.success_title,"",tx.success_plan(tariffTitle(tr,lang)),tx.success_paid(finalPrice),tx.success_bal(me.balance_rub),tx.success_exp(dt(s?.expires_at,lang)),"",`<code>${esc(s?.sub_url||"")}</code>`];
     await tg("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_connect,url:s?.sub_url||""}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
@@ -1593,11 +1666,10 @@ async function doPurchaseWithPromo(payerId, receiverId, code, kind, promoCd, pro
 async function buySelf(uid, chatId, msgId, code, mode, cbid, promoCd="", promoPct=0, devices=3) {
   try {
     const res=await doPurchaseWithPromo(uid,uid,code,mode,promoCd,promoPct,devices);
-    await gif(chatId,"gif_purchase_success");
     const me=user(uid), tx=T(uid), lang=getLang(uid);
     const lines=[tx.success_title,"",tx.success_plan(tariffTitle(res.tr,lang)),tx.success_paid(res.finalPrice),tx.success_bal(me.balance_rub),tx.success_exp(dt(res.exp,lang)),"",`<code>${esc(res.url)}</code>`];
     const kb={inline_keyboard:[[{text:tx.btn_connect,url:res.url}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]};
-    const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("sub"));
+    const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
     setMenu(uid,chatId,nm);
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:"✅"});
   } catch(e) {
@@ -1636,7 +1708,7 @@ async function showDirectPayment(uid, chatId, msgId, code, mode, promoCd="", pro
     ...(surcharge?[tx.dev_surcharge(surcharge)]:[]),
     ...(promoPct?[tx.promo_applied(promoPct)]:[]),
   ];
-  const nm=await renderMsg(chatId,msgId,lines.join("\n"),{inline_keyboard:rows},viewImg("buy"));
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),{inline_keyboard:rows},null);
   setMenu(uid,chatId,nm);
 }
 
@@ -1673,7 +1745,7 @@ async function showDeviceSelector(uid, chatId, msgId, code, mode, selectedDevice
     [{text:tx.dev_pay(totalPrice),callback_data:`dev:pay:${code}:${mode}:${devCount}`}],
     [{text:tx.btn_back,callback_data:"v:buy"}],
   ]};
-  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("buy"));
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
   setMenu(uid,chatId,nm);
 }
 
@@ -1730,7 +1802,7 @@ async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid, promoCd="", p
     rows.push([{text:tx.btn_cancel,callback_data:"v:home"}]);
     kb={inline_keyboard:rows};
   }
-  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("buy"));
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
   setMenu(uid,chatId,nm);
   if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid});
 }
@@ -1766,7 +1838,7 @@ async function askGiftConfirm(uid, chatId, msgId, code, toId, cbid) {
     [{text:tx.btn_confirm,callback_data:`g:cf:${code}:${toId}`}],
     [{text:tx.btn_cancel,callback_data:`g:p:${code}`}],
   ]};
-  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,viewImg("gift"));
+  const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
   setMenu(uid,chatId,nm);
   if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid}).catch(()=>{});
 }
@@ -1775,14 +1847,13 @@ async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
   try {
     if(Number(fromId)===Number(toId)){if(cbid)await tg("answerCallbackQuery",{callback_query_id:cbid,text:T(fromId).gift_self,show_alert:true});return;}
     const res=await doPurchase(fromId,toId,code,"gift");
-    await gif(chatId,"gif_gift_success");
     const to=user(toId), me=user(fromId), tx=T(fromId);
     const lines=[tx.gift_sent,"",tx.gift_to(to?.first_name||to?.username||String(toId)),tx.gift_plan(res.tr.title),tx.gift_price(res.tr.price_rub),tx.gift_after(me.balance_rub)];
-    const nm=await renderMsg(chatId,msgId,lines.join("\n"),{inline_keyboard:[[{text:tx.btn_gift_send,callback_data:"v:gift"},{text:tx.btn_home,callback_data:"v:home"}]]},viewImg("gift"));
+    const nm=await renderMsg(chatId,msgId,lines.join("\n"),{inline_keyboard:[[{text:tx.btn_gift_send,callback_data:"v:gift"},{text:tx.btn_home,callback_data:"v:home"}]]},null);
     setMenu(fromId,chatId,nm);
     if(to){
       const rtx=T(to.tg_id);
-      tg("sendMessage",{chat_id:to.tg_id,text:[rtx.gift_rcvd,"",rtx.gift_plan(res.tr.title),`${rtx.sub_exp(dt(res.exp,getLang(to.tg_id)))}`,`\n<code>${esc(res.url)}</code>`].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,url:res.url}]]}}).catch(()=>{});
+      tg("sendMessage",{chat_id:to.tg_id,text:[rtx.gift_rcvd,"",rtx.gift_plan(res.tr.title),`${rtx.sub_exp(dt(res.exp,getLang(to.tg_id)))}`,`\n<code>${esc(res.url)}</code>`].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:rtx.btn_connect,web_app:{url:res.url}}]]}}).catch(()=>{});
     }
     if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid,text:"🎁"});
   } catch(e) {
@@ -1800,12 +1871,15 @@ async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
 // Keyboard builders
 // ─────────────────────────────────────────────────────────────────────────────
 function homeKb(uid) {
-  const tx=T(uid);
+  const tx=T(uid), s=sub(uid), act=activeSub(s), isRu=getLang(uid)==="ru";
   const rows=[
-    [{text:tx.btn_profile,callback_data:"v:profile"},{text:tx.btn_buy,callback_data:"v:buy"}],
-    [{text:tx.btn_ref,callback_data:"v:ref"},{text:tx.btn_about,callback_data:"v:about"}],
-    [{text:tx.btn_guide,callback_data:"v:guide"},{text:tx.btn_lang,callback_data:"v:lang"}],
+    [{text: act ? (isRu?"⚡ VPN":"⚡ VPN") : tx.btn_buy, callback_data: act?"v:sub":"v:buy"},
+     {text:tx.btn_other_gift,callback_data:"v:gift"}],
+    [{text:tx.btn_ref,callback_data:"v:ref"},
+     {text:tx.btn_about,callback_data:"v:about"}],
   ];
+  if(lnk.support()) rows.push([{text:tx.btn_support,url:lnk.support()},{text:tx.btn_guide,callback_data:"v:guide"}]);
+  else rows.push([{text:tx.btn_guide,callback_data:"v:guide"}]);
   if(isAdmin(uid)) rows.push([{text:"🛠 Панель администратора",callback_data:"a:main"}]);
   return{inline_keyboard:rows};
 }
@@ -1813,9 +1887,9 @@ function homeKb(uid) {
 function profileKb(uid) {
   const tx=T(uid), s=sub(uid), act=activeSub(s);
   const rows=[];
-  // Always callback — shows subscription info inline
   rows.push([{text:act?tx.btn_sub_active:tx.btn_sub, callback_data:"v:sub"}]);
-  rows.push([{text:tx.btn_hist,callback_data:"ph:0"},{text:tx.btn_other,callback_data:"v:other"}]);
+  rows.push([{text:tx.btn_other_topup,callback_data:"v:topup"},{text:tx.btn_hist,callback_data:"ph:0"}]);
+  rows.push([{text:tx.btn_lang,callback_data:"v:lang"}]);
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
@@ -1823,14 +1897,11 @@ function profileKb(uid) {
 function subKb(uid) {
   const tx=T(uid), s=sub(uid), rows=[];
   if(activeSub(s)){
-    rows.push([{text:tx.btn_connect,url:s.sub_url}]);
-    rows.push([{text:tx.btn_qr,callback_data:"sub:qr"}]);
-    rows.push([{text:tx.btn_guide,callback_data:"v:guide"}]);
+    rows.push([{text:tx.btn_guide,callback_data:"v:guide"},{text:tx.btn_connect,url:s.sub_url}]);
   } else {
-    // Expired or no sub — show buy button
     rows.push([{text:tx.btn_buy_sub,callback_data:"v:buy"}]);
   }
-  rows.push([{text:tx.btn_back_profile,callback_data:"v:profile"},{text:tx.btn_home,callback_data:"v:home"}]);
+  rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
 
@@ -1838,16 +1909,23 @@ function buyKb(uid) {
   const tx=T(uid), lang=getLang(uid);
   const s=sub(uid), act=activeSub(s), trial=isTrialSub(uid);
   const rows=[];
-  // Show tariff buttons if: no active sub, OR active sub is trial (allow upgrade)
-  if(!act||trial){
-    tariffs().forEach(t=>rows.push([{text:`${tariffTitle(t,lang)} — ${rub(t.price_rub)}`,callback_data:`pay:n:${t.code}`}]));
-  }
-  // Show trial button only if enabled, not used, and no active sub at all
+  // Trial button at top if available
   if(trialEnabled()&&!hasUsedTrial(uid)&&!act){
     const days=trialDays();
     const label=lang==="en"?`🎁 Free trial (${days} days)`:`🎁 Пробный период (${days} дней)`;
-    rows.unshift([{text:label,callback_data:"trial:start"}]);
+    rows.push([{text:label,callback_data:"trial:start"}]);
   }
+  // Tariff buttons in 2-column grid
+  if(!act||trial){
+    const ts=tariffs();
+    for(let i=0;i<ts.length;i+=2){
+      const row=[];
+      row.push({text:`${tariffTitle(ts[i],lang)} | ${rub(ts[i].price_rub)}`,callback_data:`pay:n:${ts[i].code}`});
+      if(ts[i+1]) row.push({text:`${tariffTitle(ts[i+1],lang)} | ${rub(ts[i+1].price_rub)}`,callback_data:`pay:n:${ts[i+1].code}`});
+      rows.push(row);
+    }
+  }
+  rows.push([{text:tx.btn_other_gift,callback_data:"v:gift"}]);
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
@@ -1919,31 +1997,47 @@ function back(uid,t="v:home"){ return{inline_keyboard:[[{text:T(uid).btn_back,ca
 // Text builders
 // ─────────────────────────────────────────────────────────────────────────────
 function homeText(u) {
-  const tx=T(u.tg_id), s=sub(u.tg_id), hasSub=activeSub(s);
+  const tx=T(u.tg_id), s=sub(u.tg_id), hasSub=activeSub(s), isRu=getLang(u.tg_id)==="ru";
   const lines=[
-    tx.home_title(u.first_name||""),
+    isRu?"<b>Dreinn VPN</b>":"<b>Dreinn VPN</b>",
     "",
-    tx.home_info(u.tg_id, u.balance_rub),
-    "",
-    tx.home_footer,
+    isRu?"⚡ Стабильный мобильный интернет":"⚡ Stable mobile internet",
+    isRu?"⚡ Скорость до 1 ГБ/с":"⚡ Speed up to 1GB/s",
+    isRu?"💎 Без логов и регистрации":"💎 No logs",
   ];
   if(hasSub){const dd=Math.floor(Math.max(0,s.expires_at-now())/86400000);lines.push("",tx.home_sub_ok(dd));}
   return lines.join("\n");
 }
 
 function profileText(uid) {
-  const tx=T(uid), u=user(uid);
+  const tx=T(uid), u=user(uid), isRu=getLang(uid)==="ru";
   const refCount=Number(db.prepare("SELECT COUNT(*) c FROM referrals WHERE referrer_tg_id=?").get(uid).c||0);
-  return [tx.prof_title,"",tx.prof_bal(u.balance_rub),tx.prof_refs(refCount),tx.prof_id(uid)].join("\n");
+  const lines=[
+    tx.prof_title,"",
+    tx.prof_id(uid),
+    tx.prof_bal(u.balance_rub),
+    tx.prof_refs(refCount),
+  ];
+  return lines.join("\n");
 }
 
 function subText(uid) {
-  const tx=T(uid), s=sub(uid), lang=getLang(uid);
+  const tx=T(uid), s=sub(uid), lang=getLang(uid), isRu=lang==="ru";
   if(!activeSub(s)) return [tx.sub_title,"",tx.sub_none].join("\n");
   const ms=Math.max(0,s.expires_at-now()), dd=Math.floor(ms/86400000), hh=Math.floor((ms%86400000)/3600000), mm=Math.floor((ms%3600000)/60000);
   const devCount=Number(s.devices||3)||3;
-  const devLabel=lang==="en"?`Up to ${devCount} device${devCount>1?"s":""}`:`До ${devCount} устройств`;
-  return [tx.sub_title,"",tx.sub_plan(s.plan_title||s.plan_code||"—"),tx.sub_exp(dt(s.expires_at,lang)),tx.sub_left(dd,hh,mm),`<i>${devLabel}</i>`,"",`${tx.sub_link_hdr}\n<code>${esc(s.sub_url)}</code>`].join("\n");
+  const instruction=isRu
+    ?"❗ Для использования VPN вам необходимо установить приложение из вкладки Инструкция.\n\nПосле установки приложения, используйте кнопку ниже или отсканируйте QR-код для подключения:"
+    :"❗ To use VPN, install the app from the Instruction tab.\n\nAfter installation, use the button below or scan the QR code to connect:";
+  return [
+    `⚡ <b>${isRu?"Подключение":"Connection"}</b>`,
+    "",
+    instruction,
+    "",
+    tx.sub_plan(s.plan_title||s.plan_code||"—"),
+    tx.sub_exp(dt(s.expires_at,lang)),
+    tx.sub_left(dd,hh,mm),
+  ].join("\n");
 }
 
 // Translate tariff title to English if needed
@@ -1961,22 +2055,21 @@ function tariffTitle(t, lang) {
 }
 
 function buyText(uid) {
-  const tx=T(uid), u=user(uid), s=sub(uid), act=activeSub(s), trial=isTrialSub(uid), lang=getLang(uid);
-  const lines=[tx.buy_title,""];
-  tariffs().forEach(t=>lines.push(`${tariffTitle(t,lang)} — <b>${rub(t.price_rub)}</b>`));
-  let hint;
-  if(trial)     hint=tx.buy_trial_active;
-  else if(act)  hint=tx.buy_active;
-  else          hint=tx.buy_new;
-  lines.push("",tx.buy_balance(u.balance_rub),"",hint);
+  const tx=T(uid), u=user(uid), s=sub(uid), act=activeSub(s), trial=isTrialSub(uid), isRu=getLang(uid)==="ru";
+  const lines=[
+    isRu?"Выберите тариф и способ оплаты.":"Choose a plan and payment method.",
+  ];
+  if(trial)     lines.push("",tx.buy_trial_active);
+  else if(act)  lines.push("",tx.buy_active);
   return lines.join("\n");
 }
 
 function topupText(uid) {
-  const tx=T(uid);
+  const tx=T(uid), isRu=getLang(uid)==="ru";
   const rate=_rateCache.val;
   const lines=[tx.topup_title,""];
-  if(CRYPTOBOT_TOKEN) lines.push(`<blockquote>USDT • ${tx.crypto_rate(rate)}</blockquote>`,"");
+  if(CRYPTOBOT_TOKEN) lines.push(tx.crypto_rate(rate),"");
+  lines.push(isRu?"Выберите способ пополнения:":"Choose top-up method:");
   return lines.join("\n");
 }
 
@@ -2146,26 +2239,26 @@ function adminUserInfoText(tu) {
 async function render(uid, chatId, msgId, view, data={}) {
   const u=user(uid); if(!u) return;
   const tx=T(uid);
-  let text="", kb={}, photo=viewImg(view)||"";
+  let text="", kb={}, photo="";
 
   switch(view){
     case "home":
-      text=homeText(u); kb=homeKb(uid); photo=viewImg("home");
+      text=homeText(u); kb=homeKb(uid);
       break;
     case "profile":
-      text=profileText(uid); kb=profileKb(uid); photo=viewImg("profile")||viewImg("sub");
+      text=profileText(uid); kb=profileKb(uid);
       break;
     case "sub":
-      text=subText(uid); kb=subKb(uid); photo=viewImg("sub");
+      text=subText(uid); kb=subKb(uid);
       break;
     case "buy":
-      text=buyText(uid); kb=buyKb(uid); photo=viewImg("buy");
+      text=buyText(uid); kb=buyKb(uid);
       break;
     case "topup":
     case "v:topup": {
       const rate=CRYPTOBOT_TOKEN?await getUsdtRate():null;
       if(rate) _rateCache={val:rate,ts:Date.now()};
-      text=topupText(uid); kb=topupKb(uid); photo=viewImg("topup");
+      text=topupText(uid); kb=topupKb(uid);
       break;
     }
     case "guide": {
@@ -2177,7 +2270,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       const kbRows=[];
       if(lnk.support()) kbRows.push([{text:tx.btn_support,url:lnk.support()}]);
       kbRows.push([{text:tx.btn_home,callback_data:"v:home"}]);
-      kb={inline_keyboard:kbRows}; photo=viewImg("guide");
+      kb={inline_keyboard:kbRows};
       break;
     }
     case "about": {
@@ -2188,7 +2281,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       if(lnk.privacy()) kbRows.push([{text:tx.btn_privacy,url:lnk.privacy()}]);
       if(lnk.terms())   kbRows.push([{text:tx.btn_terms,url:lnk.terms()}]);
       kbRows.push([{text:tx.btn_home,callback_data:"v:home"}]);
-      kb={inline_keyboard:kbRows}; photo=viewImg("about");
+      kb={inline_keyboard:kbRows};
       break;
     }
     case "other":
@@ -2205,11 +2298,11 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb=langKb(uid); photo="";
       break;
     case "ref":
-      text=refText(uid); kb=refKb(uid); photo=viewImg("ref");
+      text=refText(uid); kb=refKb(uid);
       break;
 
     case "gift":
-      text=[tx.gift_title,"",tx.gift_choose].join("\n"); kb=giftKb(uid); photo=viewImg("gift");
+      text=[tx.gift_title,"",tx.gift_choose].join("\n"); kb=giftKb(uid);
       break;
     case "purchases": {
       const {text:ht,total,size}=purchasesText(uid,Number(data.page||0));
@@ -2390,10 +2483,10 @@ async function render(uid, chatId, msgId, view, data={}) {
       ]};
       break;
     default:
-      text=homeText(u); kb=homeKb(uid); photo=viewImg("home");
+      text=homeText(u); kb=homeKb(uid);
   }
 
-  const nm=await renderMsg(chatId,msgId,text,kb,photo||null);
+  const nm=await renderMsg(chatId,msgId,text,kb,null);
   setMenu(uid,chatId,nm);
 }
 
@@ -2599,7 +2692,10 @@ async function handleAdminState(msg) {
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_guide_edit"); return true;
 
     case "broadcast": {
+      const promptId = Number(row.payload||0);
       clearAdminState(aid);
+      // Clean up the "send your broadcast" prompt message
+      if(promptId) delMsg(chatId, promptId);
       // Store chat_id + message_id to use copyMessage later
       const meta=JSON.stringify({chat_id:Number(chatId),message_id:Number(msg.message_id)});
       setAdminState(aid,"broadcast_preview",meta);
@@ -2613,7 +2709,8 @@ async function handleAdminState(msg) {
       return true;
     }
     case "broadcast_preview": {
-      // Admin sent another message while preview is pending — treat it as new broadcast content
+      // Admin sent another message while preview is pending — treat it as new broadcast content.
+      // The previous preview confirmation message stays (user can still cancel it).
       clearAdminState(aid);
       const meta=JSON.stringify({chat_id:Number(chatId),message_id:Number(msg.message_id)});
       setAdminState(aid,"broadcast_preview",meta);
@@ -2760,7 +2857,14 @@ async function handleMessage(msg) {
   const text=String(msg.text||"").trim();
   const userMsgId=Number(msg.message_id||0);
 
-  // ── Always delete the user's message when in an input state ──────────────
+  // ── Admin state takes priority — MUST be before any user-state deletion ─────
+  // If admin is in an admin-state flow (broadcast, tariff edit, etc.) we must
+  // handle the message immediately without touching it.  Placing this before the
+  // user-state delete block prevents broadcast content from being wiped when the
+  // admin also happens to have a stale user_state.
+  if(isAdmin(from.id) && await handleAdminState(msg)) return;
+
+  // ── Delete the user's raw message only when they are in a user input state ──
   if(ustate) delMsg(chatId, userMsgId);
 
   // Universal /cancel command
@@ -2838,10 +2942,7 @@ async function handleMessage(msg) {
     return;
   }
 
-  // Admin state
-  if(await handleAdminState(msg)) return;
-
-  // Admin commands
+  // ── Admin commands ────────────────────────────────────────────────────────
   if(isAdmin(from.id)){
     if(text.startsWith("/add_balance")){
       const p=text.split(/\s+/);
@@ -2853,7 +2954,15 @@ async function handleMessage(msg) {
     }
   }
 
-  // Standard commands — delete the /command message too for clean look
+  // ── Non-command plain text — just reply, do NOT silently delete ─────────────
+  // (Admins sending free-form text in an unexpected state should see feedback,
+  //  not have their message vanish without explanation.)
+  if(!text.startsWith("/")){
+    await tg("sendMessage",{chat_id:chatId,text:"Используйте /start"});
+    return;
+  }
+
+  // Standard /commands — delete the command message for a clean look
   delMsg(chatId, userMsgId);
   if(text.startsWith("/start")){
     const m=text.match(/^\/start\s+partner_([a-zA-Z0-9]+)$/);
@@ -2886,7 +2995,8 @@ async function handleMessage(msg) {
   }
   if(text==="/admin"&&isAdmin(from.id)){await render(from.id,chatId,user(from.id)?.last_menu_id,"a_main");return;}
 
-  await tg("sendMessage",{chat_id:chatId,text:"Используйте /start"});
+  // Unknown /command
+  await tg("sendMessage",{chat_id:chatId,text:"Неизвестная команда. Используйте /start",parse_mode:"HTML"});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3077,7 +3187,7 @@ async function handleCallback(q) {
     try { order=await createFkOrder({uid,amountRub:finalPrice,methodId,email,ip:serverIp}); }
     catch(e){await tg("sendMessage",{chat_id:chatId,text:"❌ Не удалось создать счёт. Попробуйте позже."});return;}
     if(!order.location){await tg("sendMessage",{chat_id:chatId,text:"❌ Не удалось получить ссылку оплаты."});return;}
-    const fkId=createFkPaymentRow(uid,finalPrice,methodId,order.paymentId,order.location,order.orderId);
+    const fkId=createFkPaymentRow(uid,finalPrice,methodId,order.paymentId,order.location,order.orderId,poId);
     // Link this FK payment to the pending order via payment_id comment stored in po
     const tx=T(uid);
     const msgText=[tx.fk_created,"",`Сумма: <b>${rub(finalPrice)}</b>`,`Метод: <b>${esc(methodTitle(methodId,getLang(uid)))}</b>`,"",tx.fk_steps,tx.fk_wait].join("\n");
@@ -3099,11 +3209,18 @@ async function handleCallback(q) {
     if(!activeSub(s)){await ans(getLang(uid)==="en"?"No active subscription.":"Нет активной подписки.",true);return;}
     await ans();
     const tx=T(uid);
-    const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=16&data=${encodeURIComponent(s.sub_url)}`;
-    await tg("sendPhoto",{chat_id:chatId,photo:qrUrl,caption:tx.sub_qr_caption,parse_mode:"HTML"})
-      .catch(async()=>{
-        await tg("sendMessage",{chat_id:chatId,text:getLang(uid)==="en"?"❌ QR generation failed. Use the link above.":"❌ Не удалось сгенерировать QR-код. Используйте ссылку выше."}).catch(()=>{});
-      });
+    try {
+      const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=16&data=${encodeURIComponent(s.sub_url)}`;
+      // Fetch the QR image on the bot server — avoids Telegram trying to pull it
+      // from a remote URL, which fails when sub_url is long or qrserver is slow.
+      const qrRes = await fetch(qrUrl, { signal: AbortSignal.timeout(12000) });
+      if (!qrRes.ok) throw new Error(`QR server HTTP ${qrRes.status}`);
+      const buf = Buffer.from(await qrRes.arrayBuffer());
+      await sendPhotoBuffer(chatId, buf, "image/png", tx.sub_qr_caption, null);
+    } catch(e) {
+      console.error("[QR]", e.message);
+      await tg("sendMessage",{chat_id:chatId,text:getLang(uid)==="en"?"❌ QR generation failed. Use the link above.":"❌ Не удалось сгенерировать QR-код. Используйте ссылку выше."}).catch(()=>{});
+    }
     return;
   }
 
@@ -3196,7 +3313,11 @@ async function handleCallback(q) {
     const cpId=Number(data.split(":")[2]), cp=getCryptoPayment(cpId);
     if(!cp||cp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
     if(cp.status!=="pending"){await ans("Счёт уже закрыт.",true);return;}
-    markCryptoCancelled(cpId); await ans("Отменено.");
+    markCryptoCancelled(cpId);
+    // Also cancel any pending purchase order for this user
+    const po=getPendingOrderByUser(uid);
+    if(po) closePendingOrder(po.id,"cancelled");
+    await ans("Отменено.");
     await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
     return;
   }
@@ -3240,7 +3361,16 @@ async function handleCallback(q) {
     const fpId=Number(data.split(":")[2]), fp=getFkPayment(fpId);
     if(!fp||fp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
     if(fp.status!=="pending"){await ans("Счёт уже закрыт.",true);return;}
-    markFkCancelled(fpId); await ans("Отменено.");
+    markFkCancelled(fpId);
+    // Cancel the specific pending order this FK payment was created for,
+    // or fall back to the user's current pending order.
+    if(fp.pending_order_id){
+      closePendingOrder(fp.pending_order_id,"cancelled");
+    } else {
+      const po=getPendingOrderByUser(uid);
+      if(po) closePendingOrder(po.id,"cancelled");
+    }
+    await ans("Отменено.");
     await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
     return;
   }
@@ -3339,8 +3469,8 @@ async function handleCallback(q) {
     await ans(); return;
   }
   if(data==="a:bs"){
-    setAdminState(uid,"broadcast","");
-    await sendPrompt(chatId,"📨 Отправьте сообщение для рассылки.\n\nПоддерживается: текст (с форматированием Telegram), фото, видео, GIF, документ, голосовое.","a:cancel_admin");
+    const promptId = await sendPrompt(chatId,"📨 Отправьте сообщение для рассылки.\n\nПоддерживается: текст (с форматированием Telegram), фото, видео, GIF, документ, голосовое.","a:cancel_admin");
+    setAdminState(uid,"broadcast",String(promptId));
     await ans(); return;
   }
   if(data==="a:bs_confirm"){
@@ -3603,6 +3733,7 @@ async function boot() {
   await setMyCommands();
   await ensureFkServerIp();
   startWebhookServer();
+  startFkExpireJob();
   startExpiryNotificationJob();
   poll();
 }
