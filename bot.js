@@ -609,9 +609,8 @@ function addReferralReward(buyerId, amount) {
   const pct    = Math.max(0,Math.min(100,Number(setting("ref_percent","30"))||30));
   const reward = Math.floor((Number(amount)*pct)/100);
   if(reward<=0) return;
-  // Reward goes directly to main balance (not separate ref_balance)
-  updateBalance(r.tg_id, reward);
-  db.prepare("UPDATE users SET ref_earned=ref_earned+?,updated_at=? WHERE tg_id=?").run(reward,now(),Number(r.tg_id));
+  // Reward goes to referral balance (ref_balance_rub) — can only be withdrawn, not spent
+  db.prepare("UPDATE users SET ref_balance_rub=ref_balance_rub+?,ref_earned=ref_earned+?,updated_at=? WHERE tg_id=?").run(reward,reward,now(),Number(r.tg_id));
   db.prepare("INSERT INTO referrals(referrer_tg_id,invited_tg_id,amount_rub,percent,reward_rub,created_at) VALUES(?,?,?,?,?,?)").run(Number(r.tg_id),Number(buyerId),Number(amount),pct,reward,now());
   const isRu=getLang(r.tg_id)==="ru";
   const msg=isRu
@@ -661,7 +660,7 @@ function startFkExpireJob() {
             ? `⏰ <b>Счёт истёк</b>\n\nЗаявка на пополнение <b>${rub(fp.amount_rub)}</b>была автоматически отменена — оплата не поступила в течение 1 часа.\n\nЕсли вы оплатили — обратитесь в поддержку.`
             : `⏰ <b>Invoice expired</b>\n\ninvoice for <b>${rub(fp.amount_rub)}</b> was automatically cancelled — no payment received within 1 hour.\n\nIf you already paid, please contact support.`,
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [[{ text: tx.btn_topup, callback_data: "v:topup" }]] },
+          reply_markup: { inline_keyboard: [[{ text: tx.btn_buy, callback_data: "v:buy" }]] },
         }).catch(() => {});
       }
     } catch (e) { console.error("[FkExpireJob]", e.message); }
@@ -950,13 +949,25 @@ function init() {
 
   // Seed tariffs
   const st = db.prepare("INSERT INTO tariffs(code,title,duration_days,price_rub,sort_order) VALUES(?,?,?,?,?) ON CONFLICT(code) DO NOTHING");
-  [["m1","1 месяц",30,100,1],["m6","6 месяцев",180,600,2],["y1","1 год",365,900,3]].forEach(r=>st.run(...r));
+  [
+    ["d1","1 день",1,49,1],
+    ["d7","7 дней",7,149,2],
+    ["d14","14 дней",14,249,3],
+    ["m1","30 дней",30,399,4],
+    ["m3","90 дней",90,899,5],
+    ["y1","365 дней",365,2499,6],
+  ].forEach(r=>st.run(...r));
+  // Update titles for old tariff codes to match new naming
+  db.prepare("UPDATE tariffs SET title='30 дней',sort_order=4 WHERE code='m1' AND title='1 месяц'").run();
+  db.prepare("UPDATE tariffs SET title='365 дней',sort_order=6 WHERE code='y1' AND title='1 год'").run();
+  db.prepare("DELETE FROM tariffs WHERE code='m6'").run();
 
   // Seed settings
   const ss = db.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING");
   const defaults = [
     ["payment_methods",""],["gif_main_menu",""],["gif_purchase_success",""],["gif_gift_success",""],["gif_broadcast",""],
     ["ref_percent","30"],
+    ["ref_min_withdraw","3000"],
     ["guide_text","📋 <b>Инструкция по подключению:</b>\n\n1. Скачайте [Happ|https://www.happ.su/main/ru] или [v2RayTun|https://v2raytun.com/].\n2. Скопируйте ваш ключ доступа из раздела «Моя подписка» и вставьте его в приложение.\n3. Всё готово — интернет работает через наш сервер.\n\n💬 Если возникнут вопросы — обращайтесь в [поддержку|https://t.me/dreinnvpnsupportbot]"],
     ["guide_text_en","📋 <b>Connection guide:</b>\n\n1. Download [Happ|https://www.happ.su/main/ru] or [v2RayTun|https://v2raytun.com/].\n2. Copy your access key from «My Subscription» and paste it into the app.\n3. All done — your internet now routes through our server.\n\n💬 Questions? Contact [support|https://t.me/dreinnvpnsupportbot]"],
     // Per-section images (empty = no image)
@@ -1164,7 +1175,7 @@ async function handleCryptoBotWebhookPayload(body) {
     } else {
       tg("sendMessage",{
         chat_id: cp.tg_id,
-        text: [tx.crypto_ok(cp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),
+        text: [tx.crypto_ok(cp.amount_rub)].join("\n"),
         parse_mode: "HTML",
         reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]},
       }).catch(()=>{});
@@ -1430,7 +1441,7 @@ async function creditFkPaymentByPaymentId(paymentId, fkOrderId = null, paidAmoun
   const tx = T(fp.tg_id);
   tg("sendMessage", {
     chat_id: fp.tg_id,
-    text: [tx.fk_ok(fp.amount_rub), "", tx.success_bal(me.balance_rub)].join("\n"),
+    text: [tx.fk_ok(fp.amount_rub)].join("\n"),
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: [[{ text: tx.btn_buy_sub, callback_data: "v:buy" }, { text: tx.btn_home, callback_data: "v:home" }]] },
   }).catch(() => {});
@@ -1609,7 +1620,7 @@ async function completePurchaseAfterTopup(tgId, po) {
     const me = user(tgId), tx = T(tgId);
     const s = sub(tgId);
     const lang = getLang(tgId);
-    const lines = [tx.success_title,"",tx.success_plan(tariffTitle(tr,lang)),tx.success_paid(finalPrice),tx.success_bal(me.balance_rub),tx.success_exp(dt(s?.expires_at,lang)),"",`<code>${esc(s?.sub_url||"")}</code>`];
+    const lines = [tx.success_title,"",tx.success_plan(tariffTitle(tr,lang)),tx.success_paid(finalPrice),tx.success_exp(dt(s?.expires_at,lang)),"",`<code>${esc(s?.sub_url||"")}</code>`];
     await tg("sendMessage",{chat_id:chatId,text:lines.join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_connect,url:s?.sub_url||""}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
   } catch(e) {
     const tx = T(tgId);
@@ -1626,8 +1637,9 @@ async function doPurchaseWithPromo(payerId, receiverId, code, kind, promoCd, pro
   if(!payer||!receiver||!tr) throw new Error("INVALID");
   const s=sub(receiverId), act=activeSub(s);
   const receiverHasTrial = act && s.plan_code==="trial";
+  const renewAllowed = !act || (s && (s.expires_at - now()) <= 86400000); // expired or ≤1 day left
   if(kind==="new"   && act && !receiverHasTrial) throw new Error("ACTIVE");
-  if(kind==="renew" && !act) throw new Error("NO_ACTIVE");
+  if(kind==="renew" && !renewAllowed) throw new Error("RENEW_TOO_EARLY");
   if(kind==="gift"  && act)  throw new Error("ACTIVE");
   const devCount = Math.max(1, Math.min(10, Number(devices)||3));
   const finalPrice = calcPriceWithDevices(tr.price_rub, promoPct || 0, devCount);
@@ -1668,13 +1680,13 @@ async function buySelf(uid, chatId, msgId, code, mode, cbid, promoCd="", promoPc
   try {
     const res=await doPurchaseWithPromo(uid,uid,code,mode,promoCd,promoPct,devices);
     const me=user(uid), tx=T(uid), lang=getLang(uid);
-    const lines=[tx.success_title,"",tx.success_plan(tariffTitle(res.tr,lang)),tx.success_paid(res.finalPrice),tx.success_bal(me.balance_rub),tx.success_exp(dt(res.exp,lang)),"",`<code>${esc(res.url)}</code>`];
+    const lines=[tx.success_title,"",tx.success_plan(tariffTitle(res.tr,lang)),tx.success_paid(res.finalPrice),tx.success_exp(dt(res.exp,lang)),"",`<code>${esc(res.url)}</code>`];
     const kb={inline_keyboard:[[{text:tx.btn_connect,url:res.url}],[{text:tx.btn_sub,callback_data:"v:sub"},{text:tx.btn_home,callback_data:"v:home"}]]};
     const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
     setMenu(uid,chatId,nm);
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:"✅"});
   } catch(e) {
-    const map={ACTIVE:getLang(uid)==="en"?"Already active. Choose Renew.":"Подписка уже активна.",NO_ACTIVE:getLang(uid)==="en"?"No active sub to renew.":"Нет активной подписки для продления.",NO_MONEY:getLang(uid)==="en"?"Insufficient balance.":"Недостаточно средств."};
+    const map={ACTIVE:getLang(uid)==="en"?"Already active. Choose Renew.":"Подписка уже активна.",NO_ACTIVE:getLang(uid)==="en"?"No active sub to renew.":"Нет активной подписки для продления.",NO_MONEY:getLang(uid)==="en"?"Insufficient balance.":"Недостаточно средств.",RENEW_TOO_EARLY:getLang(uid)==="en"?"Renewal available only when subscription expires or 1 day before.":"Продление доступно только после истечения или за 1 день до конца подписки."};
     await tg("answerCallbackQuery",{callback_query_id:cbid,text:map[e.message]||e.message,show_alert:true});
     if(e.message==="NO_MONEY") {
       // Show direct payment options instead of just redirecting to topup
@@ -1703,7 +1715,7 @@ async function showDirectPayment(uid, chatId, msgId, code, mode, promoCd="", pro
   const planName=tariffTitle(tr,lang);
   const surcharge=devicesSurcharge(devCount);
   const lines=[
-    tx.direct_no_bal(rub(finalPrice), rub(u.balance_rub)),
+    isRu?"Выберите способ оплаты:":"Choose payment method:",
     "",
     `<b>${planName}</b> — <b>${rub(finalPrice)}</b>`,
     ...(surcharge?[tx.dev_surcharge(surcharge)]:[]),
@@ -1752,11 +1764,10 @@ async function showDeviceSelector(uid, chatId, msgId, code, mode, selectedDevice
 
 async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid, promoCd="", promoPct=0, devices=3) {
   const tr=tariff(code); if(!tr){if(cbid)await tg("answerCallbackQuery",{callback_query_id:cbid,text:"Тариф не найден",show_alert:true});return;}
-  const u=user(uid), tx=T(uid), lang=getLang(uid);
+  const u=user(uid), tx=T(uid), lang=getLang(uid), isRu=lang==="ru";
   const devCount=Math.max(1,Math.min(10,Number(devices)||3));
   const finalPrice = calcPriceWithDevices(tr.price_rub, promoPct, devCount);
   const surcharge=devicesSurcharge(devCount);
-  const diff=Number(u.balance_rub)-finalPrice;
   const trialActive=isTrialSub(uid);
   const extendNote = trialActive
     ? (lang==="en"
@@ -1769,40 +1780,26 @@ async function askBuyConfirm(uid, chatId, msgId, code, mode, cbid, promoCd="", p
     tx.confirm_price(finalPrice),
     ...(surcharge?[tx.dev_surcharge(surcharge)]:[]),
     ...(promoPct?[tx.promo_applied(promoPct)]:[]),
-    tx.confirm_bal(u.balance_rub),
-    tx.confirm_after(Math.max(0,diff)),"",
-    ...(extendNote ? [extendNote,""] : []),
-    diff<0?tx.confirm_low:tx.confirm_ok,
+    ...(extendNote ? ["",extendNote] : []),
+    "",
+    isRu?"Выберите способ оплаты:":"Choose payment method:",
   ];
-  // Promo code button — shown in both branches (with/without balance)
   const hasUsedAnyPromo = !!db.prepare("SELECT 1 FROM promo_uses WHERE tg_id=?").get(Number(uid));
   const promoBtn = promoCd
     ? [{text:`🎟 ${promoCd} (${promoPct}%)`, callback_data:"noop"}]
-    : hasUsedAnyPromo
-      ? [] // user already used a promo code ever — hide button
-      : [{text:tx.btn_promo, callback_data:`promo:ask:${code}:${mode}:${devCount}`}];
-
-  let kb;
-  if(diff<0){
-    // Not enough balance — show promo button FIRST, then payment options
-    const poId = createPendingOrder(uid, code, mode, promoCd, promoPct, devCount);
-    const payRows=[];
-    if(promoBtn.length) payRows.push(promoBtn); // promo at the top
-    if(CRYPTOBOT_TOKEN) payRows.push([{text:tx.btn_pay_crypto,callback_data:`direct:crypto:${poId}`}]);
-    if(isFkEnabled()){
-      payRows.push([{text:tx.btn_pay_qr,   callback_data:`direct:fk:${poId}:44`}]);
-      payRows.push([{text:tx.btn_pay_card, callback_data:`direct:fk:${poId}:36`}]);
-      payRows.push([{text:tx.btn_pay_sber, callback_data:`direct:fk:${poId}:43`}]);
-    }
-    payRows.push([{text:tx.btn_topup,callback_data:"v:topup"},{text:tx.btn_back,callback_data:"v:home"}]);
-    kb={inline_keyboard:payRows};
-  } else {
-    const rows=[];
-    if(promoBtn.length) rows.push(promoBtn);
-    rows.push([{text:tx.btn_confirm,callback_data:`pay:c:${mode}:${code}:${promoCd}:${promoPct}:${devCount}`}]);
-    rows.push([{text:tx.btn_cancel,callback_data:"v:home"}]);
-    kb={inline_keyboard:rows};
+    : hasUsedAnyPromo ? []
+    : [{text:tx.btn_promo, callback_data:`promo:ask:${code}:${mode}:${devCount}`}];
+  const poId = createPendingOrder(uid, code, mode, promoCd, promoPct, devCount);
+  const payRows=[];
+  if(promoBtn.length) payRows.push(promoBtn);
+  if(CRYPTOBOT_TOKEN) payRows.push([{text:tx.btn_pay_crypto,callback_data:`direct:crypto:${poId}`}]);
+  if(isFkEnabled()){
+    payRows.push([{text:tx.btn_pay_qr,   callback_data:`direct:fk:${poId}:44`}]);
+    payRows.push([{text:tx.btn_pay_card, callback_data:`direct:fk:${poId}:36`}]);
+    payRows.push([{text:tx.btn_pay_sber, callback_data:`direct:fk:${poId}:43`}]);
   }
+  payRows.push([{text:tx.btn_back,callback_data:"v:buy"}]);
+  const kb={inline_keyboard:payRows};
   const nm=await renderMsg(chatId,msgId,lines.join("\n"),kb,null);
   setMenu(uid,chatId,nm);
   if(cbid) await tg("answerCallbackQuery",{callback_query_id:cbid});
@@ -1872,40 +1869,30 @@ async function giftToUser(fromId, toId, code, chatId, msgId, cbid) {
 // Keyboard builders
 // ─────────────────────────────────────────────────────────────────────────────
 function homeKb(uid) {
-  const tx=T(uid), s=sub(uid), act=activeSub(s), isRu=getLang(uid)==="ru";
-  const rows=[
-    [{text: act ? (isRu?"⚡ VPN":"⚡ VPN") : tx.btn_buy, callback_data: act?"v:sub":"v:buy"},
-     {text:tx.btn_other_gift,callback_data:"v:gift"}],
-    [{text:tx.btn_ref,callback_data:"v:ref"},
-     {text:tx.btn_about,callback_data:"v:about"}],
-    [{text:tx.btn_profile,callback_data:"v:profile"},
-     {text:tx.btn_other_topup,callback_data:"v:topup"}],
-  ];
-  if(lnk.support()) rows.push([{text:tx.btn_support,url:lnk.support()},{text:tx.btn_guide,callback_data:"v:guide"}]);
-  else rows.push([{text:tx.btn_guide,callback_data:"v:guide"}]);
-  if(isAdmin(uid)) rows.push([{text:"🛠 Панель администратора",callback_data:"a:main"}]);
-  return{inline_keyboard:rows};
-}
-
-function profileKb(uid) {
   const tx=T(uid), s=sub(uid), act=activeSub(s);
   const rows=[];
-  rows.push([{text:act?tx.btn_sub_active:tx.btn_sub, callback_data:"v:sub"}]);
-  rows.push([{text:tx.btn_other_topup,callback_data:"v:topup"},{text:tx.btn_hist,callback_data:"ph:0"}]);
-  rows.push([{text:tx.btn_lang,callback_data:"v:lang"}]);
-  rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
+  rows.push([
+    {text:act?"⭐ Моя подписка":tx.btn_buy, callback_data:act?"v:sub":"v:buy"},
+    {text:tx.btn_gift_tab, callback_data:"v:gift"},
+  ]);
+  rows.push([{text:"🤝 Партнёрская программа", callback_data:"v:ref"}]);
+  rows.push([{text:tx.btn_about, callback_data:"v:about"}]);
+  if(lnk.proxy()) rows.push([{text:"🔥 Бесплатные прокси для TG",url:lnk.proxy()}]);
+  if(isAdmin(uid)) rows.push([{text:"🛠 Панель администратора",callback_data:"a:main"}]);
   return{inline_keyboard:rows};
 }
 
 function subKb(uid) {
   const tx=T(uid), s=sub(uid), rows=[];
   if(activeSub(s)){
+    const daysLeft=Math.floor(Math.max(0,s.expires_at-now())/86400000);
     rows.push([{text:tx.btn_guide,callback_data:"v:guide"},{text:tx.btn_connect,url:s.sub_url}]);
-    rows.push([{text:tx.btn_qr,callback_data:"sub:qr"},{text:tx.btn_renew,callback_data:`pay:n:${s.plan_code}`}]);
+    if(daysLeft<=1) rows.push([{text:tx.btn_renew,callback_data:`pay:rw:${s.plan_code}`},{text:tx.btn_home,callback_data:"v:home"}]);
+    else rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   } else {
     rows.push([{text:tx.btn_buy_sub,callback_data:"v:buy"}]);
+    rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   }
-  rows.push([{text:tx.btn_other_topup,callback_data:"v:topup"},{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
 
@@ -1929,7 +1916,6 @@ function buyKb(uid) {
       rows.push(row);
     }
   }
-  rows.push([{text:tx.btn_other_gift,callback_data:"v:gift"}]);
   rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
@@ -1947,23 +1933,24 @@ function topupKb(uid) {
 }
 
 function refKb(uid) {
-  const tx=T(uid), u=user(uid);
+  const u=user(uid), isRu=getLang(uid)==="ru";
   const link=refLink(u.ref_code);
-  // t.me/share/url requires ?url= (mandatory), &text= is prepended before the URL by Telegram.
-  // Result in chat: "Привет. Подключись к VPN по моей ссылке:\nhttps://t.me/bot?start=partner_xxx\nРаботает быстро и стабильно."
-  const isRu=getLang(uid)==="ru";
   const shareText=isRu
     ? "Привет. Подключись к VPN по моей ссылке:\n\nРаботает быстро и стабильно."
     : "Hey! Connect to VPN using my link:\n\nFast and reliable.";
   const shareUrl="https://t.me/share/url?url="+encodeURIComponent(link)+"&text="+encodeURIComponent(shareText);
+  const refBal=Number(u.ref_balance_rub||0);
+  const minW=Number(setting("ref_min_withdraw","3000"))||3000;
+  const canWithdraw=refBal>=minW;
   const rows=[];
-  // URL button → opens Telegram's native share picker
-  rows.push([{text:tx.btn_invite, url:shareUrl}]);
+  rows.push([{text:isRu?"📨 Пригласить друга":"📨 Invite friend", url:shareUrl}]);
   rows.push([
-    {text:tx.btn_ref_hist,callback_data:"ref:hist:0"},
-    {text:tx.btn_ref_code,callback_data:"ref:r"},
+    {text:isRu?"📋 История начислений":"📋 Earnings",callback_data:"ref:hist:0"},
+    {text:isRu?"🔄 Сменить код":"🔄 Reset code",callback_data:"ref:r"},
   ]);
-  rows.push([{text:tx.btn_home,callback_data:"v:home"}]);
+  rows.push([{text:isRu?canWithdraw?`💸 Вывести ${refBal.toFixed(0)} ₽`:`💸 Вывод (от ${minW}₽)`:canWithdraw?`💸 Withdraw ${refBal.toFixed(0)} ₽`:`💸 Withdraw (min ${minW}₽)`, callback_data:"ref:withdraw"}]);
+  rows.push([{text:isRu?"⚙️ Настроить реквизиты":"⚙️ Set payout details",callback_data:"ref:setpay"}]);
+  rows.push([{text:isRu?"« Главное меню":"« Main menu",callback_data:"v:home"}]);
   return{inline_keyboard:rows};
 }
 
@@ -2000,30 +1987,32 @@ function back(uid,t="v:home"){ return{inline_keyboard:[[{text:T(uid).btn_back,ca
 // ─────────────────────────────────────────────────────────────────────────────
 // Text builders
 // ─────────────────────────────────────────────────────────────────────────────
-function homeText(u) {
-  const tx=T(u.tg_id), s=sub(u.tg_id), hasSub=activeSub(s), isRu=getLang(u.tg_id)==="ru";
-  const lines=[
-    isRu?"<b>Dreinn VPN</b>":"<b>Dreinn VPN</b>",
-    "",
-    isRu?"⚡ Стабильный мобильный интернет":"⚡ Stable mobile internet",
-    isRu?"⚡ Скорость до 1 ГБ/с":"⚡ Speed up to 1GB/s",
-    isRu?"💎 Без логов и регистрации":"💎 No logs",
-    "",
-    tx.home_info(u.tg_id, u.balance_rub),
-  ];
-  if(hasSub){const dd=Math.floor(Math.max(0,s.expires_at-now())/86400000);lines.push("",tx.home_sub_ok(dd));}
-  return lines.join("\n");
+// Extract @username from a t.me URL or plain @handle
+function toHandle(url) {
+  if(!url) return "";
+  const m=url.match(/t\.me\/([A-Za-z0-9_]+)/);
+  if(m) return "@"+m[1];
+  if(url.startsWith("@")) return url;
+  return url;
 }
 
-function profileText(uid) {
-  const tx=T(uid), u=user(uid), isRu=getLang(uid)==="ru";
-  const refCount=Number(db.prepare("SELECT COUNT(*) c FROM referrals WHERE referrer_tg_id=?").get(uid).c||0);
+function homeText(u) {
+  const tx=T(u.tg_id), s=sub(u.tg_id), hasSub=activeSub(s);
+  const isRu=getLang(u.tg_id)==="ru";
   const lines=[
-    tx.prof_title,"",
-    tx.prof_id(uid),
-    tx.prof_bal(u.balance_rub),
-    tx.prof_refs(refCount),
+    isRu?`🐸 Привет, ${esc(u.first_name||String(u.tg_id))}`:`🐸 Hello, ${esc(u.first_name||String(u.tg_id))}`,
+    `${isRu?"Ваш ID":"Your ID"}: <code>${u.tg_id}</code>`,
   ];
+  if(hasSub){
+    const dd=Math.floor(Math.max(0,s.expires_at-now())/86400000);
+    lines.push(isRu?`Подписка активна — осталось ${dd} дн.`:`Subscription active — ${dd} days left`);
+  }
+  const newsHandle=toHandle(lnk.news()), supHandle=toHandle(lnk.support());
+  if(newsHandle||supHandle){
+    lines.push("");
+    if(newsHandle) lines.push(isRu?`📢 Канал — ${newsHandle}`:`📢 News — ${newsHandle}`);
+    if(supHandle)  lines.push(isRu?`💬 Поддержка — ${supHandle}`:`💬 Support — ${supHandle}`);
+  }
   return lines.join("\n");
 }
 
@@ -2061,11 +2050,8 @@ function tariffTitle(t, lang) {
 }
 
 function buyText(uid) {
-  const tx=T(uid), u=user(uid), s=sub(uid), act=activeSub(s), trial=isTrialSub(uid), isRu=getLang(uid)==="ru";
-  const lines=[
-    tx.buy_balance(u.balance_rub),
-    isRu?"Выберите тариф и способ оплаты.":"Choose a plan and payment method.",
-  ];
+  const tx=T(uid), s=sub(uid), act=activeSub(s), trial=isTrialSub(uid), isRu=getLang(uid)==="ru";
+  const lines=[isRu?"Выберите тариф и способ оплаты.":"Choose a plan and payment method."];
   if(trial)     lines.push("",tx.buy_trial_active);
   else if(act)  lines.push("",tx.buy_active);
   return lines.join("\n");
@@ -2081,29 +2067,35 @@ function topupText(uid) {
 }
 
 function refText(uid) {
-  const tx=T(uid), u=user(uid), isRu=getLang(uid)==="ru";
-  const st=db.prepare("SELECT COUNT(*) c, COALESCE(SUM(reward_rub),0) s FROM referrals WHERE referrer_tg_id=?").get(Number(uid));
+  const u=user(uid), isRu=getLang(uid)==="ru";
+  const st=db.prepare("SELECT COUNT(*) c FROM referrals WHERE referrer_tg_id=?").get(Number(uid));
   const pct=Number(setting("ref_percent","30"))||30;
-  const totalEarned=Number(u.ref_earned||0); // lifetime earnings credited to main balance
+  const minW=Number(setting("ref_min_withdraw","3000"))||3000;
+  const refBal=Number(u.ref_balance_rub||0);
   const link=refLink(u.ref_code);
+  const payMethod=u.payout_method||"";
+  const payDetails=u.payout_details||"";
+  const shareText=isRu
+    ? "Привет. Подключись к VPN по моей ссылке:\n\nРаботает быстро и стабильно."
+    : "Hey! Connect to VPN using my link:\n\nFast and reliable.";
+  const shareUrl="https://t.me/share/url?url="+encodeURIComponent(link)+"&text="+encodeURIComponent(shareText);
+  const examplePayment=540, exampleBonus=Math.floor(examplePayment*pct/100);
   const lines=[
-    tx.ref_title,"",
-    // ref link in blockquote (monospace = tap to copy on mobile)
+    isRu?"<b>🤝 Партнёрская программа</b>":"<b>🤝 Partner program</b>","",
+    isRu
+      ?`1. Приглашай друзей по своей уникальной ссылке и получай <b>${pct}%</b> с каждого пополнения.\n2. Выводи заработанные средства на удобный способ.`
+      :`1. Invite friends with your unique link and earn <b>${pct}%</b> of every payment.\n2. Withdraw earnings to your preferred method.`,
+    "",
     `<blockquote><code>${link}</code></blockquote>`,
     isRu?"<i>(Нажмите, чтобы скопировать)</i>":"<i>(Tap to copy)</i>","",
-    // stats
+    "<b>Статистика:</b>",
     isRu?`Приглашено: <b>${st.c||0}</b>`:`Invited: <b>${st.c||0}</b>`,
-    isRu?`Заработано: <b>${totalEarned.toFixed(2)}₽</b>`:`Earned: <b>${totalEarned.toFixed(2)}₽</b>`,"",
-    // promo block — reward credited to main balance
-    isRu?[
-      "⭐ <b>Это выгодно!</b>",
-      `<i>${pct}% от каждой покупки подписки реферала</i>`,
-      `<i>Начисляется на основной баланс</i>`,
-    ].join("\n"):[
-      "⭐ <b>Great deal!</b>",
-      `<i>${pct}% from every referral's subscription purchase</i>`,
-      `<i>Credited to your main balance</i>`,
-    ].join("\n"),
+    isRu?`Баланс: <b>${refBal.toFixed(2)} ₽</b>`:`Balance: <b>${refBal.toFixed(2)} ₽</b>`,
+    isRu?`Способ вывода: <b>${payMethod||"не задан"}</b>`:`Payout method: <b>${payMethod||"not set"}</b>`,
+    isRu?`Реквизиты: <b>${payDetails||"не указаны"}</b>`:`Details: <b>${payDetails||"not specified"}</b>`,"",
+    isRu?`ℹ️ Вывод доступен от <b>${minW}₽</b>.`:`ℹ️ Minimum withdrawal: <b>${minW}₽</b>.`,
+    isRu?`ℹ️ Текущая ставка: <b>${pct}%</b>`:`ℹ️ Current rate: <b>${pct}%</b>`,
+    isRu?`Пример: платёж <b>${examplePayment}₽</b> → бонус <b>${exampleBonus.toFixed(1)}₽</b>`:`Example: payment <b>${examplePayment}₽</b> → bonus <b>${exampleBonus.toFixed(1)}₽</b>`,
   ];
   return lines.join("\n");
 }
@@ -2241,6 +2233,45 @@ function adminUserInfoText(tu) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Subscription screen with inline QR (Aurora-style)
+// ─────────────────────────────────────────────────────────────────────────────
+async function renderSubWithQR(uid, chatId, msgId) {
+  const tx=T(uid), s=sub(uid), lang=getLang(uid), isRu=lang==="ru";
+  const ms=Math.max(0,s.expires_at-now());
+  const dd=Math.floor(ms/86400000), hh=Math.floor((ms%86400000)/3600000), mm=Math.floor((ms%3600000)/60000);
+
+  const caption=[
+    `⚡ <b>${isRu?"Подключение":"Connection"}</b>`,
+    "",
+    isRu
+      ?"❗ Для использования VPN установите приложение из раздела Инструкция.\n\nПосле установки используйте кнопку ниже или отсканируйте QR-код для подключения:"
+      :"❗ To use VPN, install the app from the Guide section.\n\nAfter installation, use the button below or scan the QR code to connect:",
+    "",
+    tx.sub_plan(s.plan_title||s.plan_code||"—"),
+    tx.sub_exp(dt(s.expires_at,lang)),
+    tx.sub_left(dd,hh,mm),
+  ].join("\n");
+
+  const kb={inline_keyboard:[
+    [{text:tx.btn_guide,callback_data:"v:guide"},{text:tx.btn_connect,url:s.sub_url}],
+    ...(dd<=1?[[{text:tx.btn_renew,callback_data:`pay:rw:${s.plan_code}`},{text:tx.btn_home,callback_data:"v:home"}]]:[[{text:tx.btn_home,callback_data:"v:home"}]]),
+  ]};
+
+  try {
+    const buf=await QRCode.toBuffer(s.sub_url,{width:512,margin:2,errorCorrectionLevel:"M"});
+    // Delete the old inline menu message and send a fresh photo message
+    if(msgId) await tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
+    const m=await sendPhotoBuffer(chatId,buf,"image/png",caption,kb);
+    setMenu(uid,chatId,m.message_id);
+  } catch(e) {
+    console.error("[subQR]",e.message);
+    // Fallback: text-only subscription screen
+    const nm=await renderMsg(chatId,msgId,subText(uid),subKb(uid),null);
+    setMenu(uid,chatId,nm);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Render  — the main view dispatcher
 // ─────────────────────────────────────────────────────────────────────────────
 async function render(uid, chatId, msgId, view, data={}) {
@@ -2252,22 +2283,17 @@ async function render(uid, chatId, msgId, view, data={}) {
     case "home":
       text=homeText(u); kb=homeKb(uid);
       break;
-    case "profile":
-      text=profileText(uid); kb=profileKb(uid);
-      break;
     case "sub":
+      if(activeSub(sub(uid))){
+        // Active subscription → show QR code inline (Aurora-style)
+        await renderSubWithQR(uid,chatId,msgId);
+        return; // renderSubWithQR handles setMenu — skip the bottom renderMsg/setMenu
+      }
       text=subText(uid); kb=subKb(uid);
       break;
     case "buy":
       text=buyText(uid); kb=buyKb(uid);
       break;
-    case "topup":
-    case "v:topup": {
-      const rate=CRYPTOBOT_TOKEN?await getUsdtRate():null;
-      if(rate) _rateCache={val:rate,ts:Date.now()};
-      text=topupText(uid); kb=topupKb(uid);
-      break;
-    }
     case "guide": {
       const lang=getLang(uid);
       const rawGuide = lang==="en"
@@ -2291,15 +2317,6 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb={inline_keyboard:kbRows};
       break;
     }
-    case "other":
-      text=otherText(uid);
-      kb={inline_keyboard:[
-        [{text:tx.btn_other_topup,callback_data:"v:topup"}],
-        [{text:tx.btn_other_gift,callback_data:"v:gift"}],
-        [{text:tx.btn_back_profile,callback_data:"v:profile"}],
-      ]};
-      photo="";
-      break;
     case "lang":
       text=[tx.lang_title,"",`${tx.lang_current}: <b>${getLang(uid)==="ru"?tx.lang_ru:tx.lang_en}</b>`].join("\n");
       kb=langKb(uid); photo="";
@@ -2313,7 +2330,7 @@ async function render(uid, chatId, msgId, view, data={}) {
       break;
     case "purchases": {
       const {text:ht,total,size}=purchasesText(uid,Number(data.page||0));
-      text=ht; kb=pagingKb(uid,"ph",Number(data.page||0),total,size,"v:profile"); photo="";
+      text=ht; kb=pagingKb(uid,"ph",Number(data.page||0),total,size,"v:home"); photo="";
       break;
     }
     case "ref_hist": {
@@ -2328,14 +2345,46 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb={inline_keyboard:[
         [{text:"💸 Тарифы",callback_data:"a:t"},{text:"🎞 GIF-анимации",callback_data:"a:g"}],
         [{text:"📨 Рассылка",callback_data:"a:b"},{text:"🔗 Ссылки",callback_data:"a:links"}],
-        [{text:"🖼 Изображения",callback_data:"a:imgs"}],
         [{text:"🤝 Реф. процент",callback_data:"a:r"},{text:"📋 Инструкция",callback_data:"a:guide_edit"}],
         [{text:"📢 Канал + Пробный период",callback_data:"a:channel"}],
         [{text:"💳 FreeKassa",callback_data:"a:fk"}],
+        [{text:"💸 Заявки на вывод",callback_data:"a:withdrawals:0"}],
         [{text:"🎟 Промокоды",callback_data:"a:promo"},{text:"🔍 Поиск юзера",callback_data:"a:find"}],
         [{text:"👥 Пользователи",callback_data:"a:users:0"},{text:"🗄 База данных",callback_data:"a:db"}],
         [{text:"« Назад",callback_data:"v:home"}],
       ]};
+      break;
+    }
+
+    case "a_withdrawals": {
+      const wPage=Number(data?.page||0), wSize=10, wOff=wPage*wSize;
+      const wRows=db.prepare("SELECT w.*,u.first_name,u.username FROM withdrawal_requests w LEFT JOIN users u ON u.tg_id=w.tg_id WHERE w.status='pending' ORDER BY w.created_at DESC LIMIT ? OFFSET ?").all(wSize,wOff);
+      const wTotal=Number(db.prepare("SELECT COUNT(*) c FROM withdrawal_requests WHERE status='pending'").get().c||0);
+      const wLines=["<b>💸 Заявки на вывод</b>",""];
+      if(!wRows.length) wLines.push("<i>Нет заявок.</i>");
+      else wRows.forEach((w,i)=>{
+        const name=esc(w.first_name||w.username||String(w.tg_id));
+        wLines.push(`${wOff+i+1}. <b>${name}</b> (<code>${w.tg_id}</code>)`);
+        wLines.push(`   Сумма: <b>${rub(w.amount_rub)}</b>  |  ${esc(w.method)}: <b>${esc(w.details)}</b>`);
+        wLines.push(`   <i>${dt(w.created_at)}</i>`);
+      });
+      text=wLines.join("\n");
+      const wKbRows=[];
+      wRows.forEach(w=>{
+        wKbRows.push([
+          {text:`✅ #${w.id} Выплачено`,callback_data:`a:wd_done:${w.id}:${wPage}`},
+          {text:`❌ #${w.id} Отклонить`,callback_data:`a:wd_reject:${w.id}:${wPage}`},
+        ]);
+      });
+      // pagination
+      const wMax=Math.max(0,Math.ceil(wTotal/wSize)-1);
+      const wNav=[];
+      if(wPage>0) wNav.push({text:"◀",callback_data:`a:withdrawals_p:${wPage-1}`});
+      wNav.push({text:`${wPage+1}/${wMax+1}`,callback_data:"noop"});
+      if(wPage<wMax) wNav.push({text:"▶",callback_data:`a:withdrawals_p:${wPage+1}`});
+      if(wNav.length>1) wKbRows.push(wNav);
+      wKbRows.push([{text:"« Назад",callback_data:"a:main"}]);
+      kb={inline_keyboard:wKbRows};
       break;
     }
 
@@ -2401,12 +2450,6 @@ async function render(uid, chatId, msgId, view, data={}) {
         [{text:"« Назад",callback_data:"a:main"}],
       ]};
       break;
-    case "a_imgs": {
-      text=adminImgsText();
-      const views=[["home","Главная"],["sub","Подписка / Профиль"],["buy","Тарифы"],["topup","Пополнение"],["ref","Рефералы"],["gift","Подарок"],["guide","Инструкция"],["about","О нас"]];
-      kb={inline_keyboard:[...views.map(([v,label])=>[{text:`🖼 ${label}${viewImg(v)?" ✅":""}`,callback_data:`a:img:${v}`}]),[{text:"« Назад",callback_data:"a:main"}]]};
-      break;
-    }
     case "a_links": {
       text=adminLinksText();
       const linkKeys=[["url_support","Поддержка"],["url_privacy","Политика конф."],["url_terms","Соглашение"],["url_proxy","Прокси"],["url_news","Канал"],["url_status","Статус серверов"]];
@@ -2418,8 +2461,16 @@ async function render(uid, chatId, msgId, view, data={}) {
       kb={inline_keyboard:[[{text:"✏️ Создать рассылку",callback_data:"a:bs"}],[{text:"« Назад",callback_data:"a:main"}]]};
       break;
     case "a_ref":
-      text=["<b>Реф. процент</b>","",`Ставка: <b>${setting("ref_percent","30")}%</b>`,`<i>Начисляется на основной баланс пользователя при покупке реферала.</i>`].join("\n");
-      kb={inline_keyboard:[[{text:"✏️ Изменить ставку",callback_data:"a:rp"}],[{text:"« Назад",callback_data:"a:main"}]]};
+      text=["<b>Реферальная программа</b>","",
+        `Ставка: <b>${setting("ref_percent","30")}%</b>`,
+        `Мин. вывод: <b>${setting("ref_min_withdraw","3000")}₽</b>`,
+        "<i>Награда начисляется на реферальный баланс; выводится вручную через заявки.</i>",
+      ].join("\n");
+      kb={inline_keyboard:[
+        [{text:"✏️ Изменить ставку",callback_data:"a:rp"},{text:"✏️ Мин. вывод",callback_data:"a:rmin"}],
+        [{text:"💸 Заявки на вывод",callback_data:"a:withdrawals:0"}],
+        [{text:"« Назад",callback_data:"a:main"}],
+      ]};
       break;
     case "a_db":
       text="<b>База данных</b>\n\nСкачайте или импортируйте БД.\n⚠️ После импорта бот перезапустится.";
@@ -2666,18 +2717,6 @@ async function handleAdminState(msg) {
       await tg("sendMessage",{chat_id:chatId,text:"✅ GIF сохранён."});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_gif"); return true;
     }
-    case "section_img": {
-      const v=msg.photo?msg.photo[msg.photo.length-1].file_id:(msg.document?.file_id||text);
-      if(!v){await tg("sendMessage",{chat_id:chatId,text:"Отправьте фото или file_id."});return true;}
-      setSetting(`img_${row.payload}`,v); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:`✅ Изображение для «${row.payload}» сохранено.`});
-      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_imgs"); return true;
-    }
-    case "section_img_clear": {
-      delSetting(`img_${row.payload}`); clearAdminState(aid);
-      await tg("sendMessage",{chat_id:chatId,text:"✅ Изображение удалено."});
-      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_imgs"); return true;
-    }
     case "edit_link": {
       const urlVal=text.trim();
       const validUrl=!urlVal||urlVal==="-"||urlVal.startsWith("http")||urlVal.startsWith("@")||urlVal.startsWith("t.me/");
@@ -2733,6 +2772,12 @@ async function handleAdminState(msg) {
       const n=Number(text); if(!Number.isFinite(n)||n<0||n>100){await tg("sendMessage",{chat_id:chatId,text:"Введите 0..100."});return true;}
       setSetting("ref_percent",Math.round(n)); clearAdminState(aid);
       await tg("sendMessage",{chat_id:chatId,text:`✅ Ставка: ${Math.round(n)}%`});
+      await render(aid,chatId,user(aid)?.last_menu_id||null,"a_ref"); return true;
+    }
+    case "ref_min_withdraw": {
+      const n=Number(text); if(!Number.isFinite(n)||n<1){await tg("sendMessage",{chat_id:chatId,text:"Введите сумму >= 1."});return true;}
+      setSetting("ref_min_withdraw",Math.round(n)); clearAdminState(aid);
+      await tg("sendMessage",{chat_id:chatId,text:`✅ Мин. вывод: ${Math.round(n)}₽`});
       await render(aid,chatId,user(aid)?.last_menu_id||null,"a_ref"); return true;
     }
 
@@ -2880,22 +2925,8 @@ async function handleMessage(msg) {
     // parse promptId from payload (always last segment after last colon-group)
     const promptId=Number((ustate.payload||"").split(":").pop())||0;
     delMsg(chatId, promptId);
-    const view=(ustate.state==="topup_crypto_amount"||ustate.state==="topup_fk_amount")?"topup":"home";
-    await render(from.id,chatId,user(from.id)?.last_menu_id||null,view);
+    await render(from.id,chatId,user(from.id)?.last_menu_id||null,"home");
     return;
-  }
-
-  // Crypto topup amount
-  if(ustate?.state==="topup_crypto_amount"){
-    if(!msg.text||msg.text.startsWith("/")) return;
-    const promptMsgId=Number(ustate.payload||0);
-    await handleCryptoAmount(from.id,chatId,text,promptMsgId,userMsgId); return;
-  }
-  if(ustate?.state==="topup_fk_amount"){
-    if(!msg.text||msg.text.startsWith("/")) return;
-    const parts=(ustate.payload||"").split(":");
-    const methodId=Number(parts[0]||44), promptMsgId=Number(parts[1]||0);
-    await handleFkAmount(from.id,chatId,text,methodId,promptMsgId,userMsgId); return;
   }
 
   // Promo code entry
@@ -2934,6 +2965,27 @@ async function handleMessage(msg) {
       return;
     }
     await askGiftConfirm(from.id, chatId, user(from.id)?.last_menu_id||null, code, found.tg_id, null);
+    return;
+  }
+
+  // Referral payout details entry
+  if(ustate?.state==="ref_setpay"){
+    if(!msg.text||msg.text.startsWith("/")) return;
+    const promptMsgId=Number(ustate.payload||0);
+    clearUserState(from.id);
+    delMsg(chatId, promptMsgId);
+    const isRu2=getLang(from.id)==="ru";
+    const raw=text.trim();
+    const sep=raw.includes("|")?"|":"-";
+    const parts2=raw.split(sep).map(s=>s.trim());
+    if(parts2.length<2||!parts2[0]||!parts2[1]){
+      await tg("sendMessage",{chat_id:chatId,text:isRu2?"❌ Неверный формат. Пример: Сбербанк | +79001234567":"❌ Wrong format. Example: Bank | card@email.com"});
+      return;
+    }
+    const method=parts2[0].slice(0,100), details=parts2.slice(1).join("|").trim().slice(0,200);
+    db.prepare("UPDATE users SET payout_method=?,payout_details=?,updated_at=? WHERE tg_id=?").run(method,details,now(),Number(from.id));
+    await tg("sendMessage",{chat_id:chatId,text:isRu2?`✅ Реквизиты сохранены.\nМетод: <b>${esc(method)}</b>\nРеквизиты: <b>${esc(details)}</b>`:`✅ Payout details saved.\nMethod: <b>${esc(method)}</b>\nDetails: <b>${esc(details)}</b>`,parse_mode:"HTML"});
+    await render(from.id,chatId,user(from.id)?.last_menu_id||null,"ref");
     return;
   }
 
@@ -2990,11 +3042,6 @@ async function handleMessage(msg) {
     if(!passed) return;
     await render(from.id,chatId,null,"sub");return;
   }
-  if(text==="/balance"){
-    const passed=await enforceChannelGate(from.id,chatId,getLang(from.id));
-    if(!passed) return;
-    await render(from.id,chatId,null,"topup");return;
-  }
   if(text==="/referral"){
     const passed=await enforceChannelGate(from.id,chatId,getLang(from.id));
     if(!passed) return;
@@ -3030,10 +3077,8 @@ async function handleCallback(q) {
     tg("deleteMessage",{chat_id:chatId,message_id:msgId}).catch(()=>{});
     await ans();
     // Determine where to go back
-    const sub2=data.split(":")[1]; // topup_crypto | topup_fk | promo | gift
-    if(sub2==="topup_crypto"||sub2==="topup_fk"){
-      await render(uid,chatId,user(uid)?.last_menu_id||null,"topup");
-    } else if(sub2==="promo"){
+    const sub2=data.split(":")[1];
+    if(sub2==="promo"){
       // Return to buy confirm — extract code/mode/devices from cancel data
       // format: cancel:promo:CODE:MODE:DEVICES
       const parts=data.split(":");
@@ -3107,18 +3152,30 @@ async function handleCallback(q) {
 
   // ── Navigation ────────────────────────────────────────────────────────────
   const navMap={
-    "v:home":"home","v:profile":"profile","v:sub":"sub","v:buy":"buy",
-    "v:topup":"topup","v:pay_other":"topup","v:ref":"ref","v:guide":"guide",
-    "v:about":"about","v:gift":"gift","v:lang":"lang","v:other":"other",
+    "v:home":"home","v:sub":"sub","v:buy":"buy",
+    "v:ref":"ref","v:guide":"guide",
+    "v:about":"about","v:gift":"gift","v:lang":"lang",
   };
   if(navMap[data]){await render(uid,chatId,msgId,navMap[data]);await ans();return;}
 
   // ── Purchase ──────────────────────────────────────────────────────────────
-  // pay:n: → show device selector first
+  // pay:n: → show device selector for NEW subscription
   if(data.startsWith("pay:n:")){
     const code=data.split(":")[2];
     await ans();
     await showDeviceSelector(uid,chatId,msgId,code,"new",3);
+    return;
+  }
+  // pay:rw: → show device selector for RENEW (active subscription required)
+  if(data.startsWith("pay:rw:")){
+    const code=data.split(":")[2];
+    const s=sub(uid);
+    if(!s){await ans(getLang(uid)==="en"?"No subscription found.":"Подписка не найдена.",true);return;}
+    const daysLeft=Math.floor(Math.max(0,s.expires_at-now())/86400000);
+    const renewOk=!activeSub(s)||(daysLeft<=1);
+    if(!renewOk){await ans(getLang(uid)==="en"?"Renewal available only when subscription expires or 1 day before.":"Продление доступно только после истечения или за 1 день до конца подписки.",true);return;}
+    await ans();
+    await showDeviceSelector(uid,chatId,msgId,code,"renew",Number(s.devices||3));
     return;
   }
   // pay:r: (renew while active) removed from UI
@@ -3210,20 +3267,12 @@ async function handleCallback(q) {
   if(data.startsWith("ph:")){await render(uid,chatId,msgId,"purchases",{page:Number(data.split(":")[1]||0)});await ans();return;}
 
   // ── Subscription ──────────────────────────────────────────────────────────
-  // sub:copy removed (guide button replaces it)
+  // sub:qr — re-render the subscription screen with inline QR
   if(data==="sub:qr"){
     const s=sub(uid);
     if(!activeSub(s)){await ans(getLang(uid)==="en"?"No active subscription.":"Нет активной подписки.",true);return;}
     await ans();
-    const tx=T(uid);
-    try {
-      // Generate QR locally — no external service, works with any URL length
-      const buf = await QRCode.toBuffer(s.sub_url, { width: 512, margin: 2, errorCorrectionLevel: "M" });
-      await sendPhotoBuffer(chatId, buf, "image/png", tx.sub_qr_caption, null);
-    } catch(e) {
-      console.error("[QR]", e.message);
-      await tg("sendMessage",{chat_id:chatId,text:getLang(uid)==="en"?"❌ QR generation failed. Use the link above.":"❌ Не удалось сгенерировать QR-код. Используйте ссылку выше."}).catch(()=>{});
-    }
+    await renderSubWithQR(uid,chatId,msgId);
     return;
   }
 
@@ -3245,10 +3294,48 @@ async function handleCallback(q) {
     db.prepare("UPDATE users SET ref_code=?,updated_at=? WHERE tg_id=?").run(crypto.randomBytes(5).toString("hex"),now(),uid);
     await render(uid,chatId,msgId,"ref"); await ans("✅"); return;
   }
-  // ref:p removed — no payout settings needed
-  // ref:pm: removed — no payout method needed
   if(data.startsWith("ref:hist:")){await render(uid,chatId,msgId,"ref_hist",{page:Number(data.split(":")[2]||0)});await ans();return;}
-  // ref:w removed — referral rewards go to main balance directly
+
+  // ── Referral: set payout details ─────────────────────────────────────────
+  if(data==="ref:setpay"){
+    const isRu=getLang(uid)==="ru";
+    const u2=user(uid);
+    const curMethod=u2.payout_method||"";
+    const curDetails=u2.payout_details||"";
+    const promptText=isRu
+      ?`⚙️ <b>Реквизиты для вывода</b>\n\nТекущий способ: <b>${curMethod||"не задан"}</b>\nТекущие реквизиты: <b>${curDetails||"не указаны"}</b>\n\nОтправьте строку в формате:\n<code>Способ | Реквизиты</code>\nПример: <code>Сбербанк | +79001234567</code>`
+      :`⚙️ <b>Payout details</b>\n\nCurrent method: <b>${curMethod||"not set"}</b>\nCurrent details: <b>${curDetails||"not set"}</b>\n\nSend in format:\n<code>Method | Details</code>\nExample: <code>Bank | card@email.com</code>`;
+    await ans();
+    const promptId=await sendPrompt(chatId,promptText,"cancel:input");
+    setUserState(uid,"ref_setpay",String(promptId));
+    return;
+  }
+
+  // ── Referral: withdraw ────────────────────────────────────────────────────
+  if(data==="ref:withdraw"){
+    const isRu=getLang(uid)==="ru";
+    const u2=user(uid);
+    const refBal=Number(u2.ref_balance_rub||0);
+    const minW=Number(setting("ref_min_withdraw","3000"))||3000;
+    if(refBal<minW){
+      await ans(isRu?`Минимальная сумма вывода ${minW}₽. У вас ${refBal.toFixed(2)}₽`:`Minimum withdrawal ${minW}₽. You have ${refBal.toFixed(2)}₽`,true);
+      return;
+    }
+    if(!u2.payout_method||!u2.payout_details){
+      await ans(isRu?"Сначала настройте реквизиты для вывода.":"Please set your payout details first.",true);
+      return;
+    }
+    // Create withdrawal request
+    db.prepare("INSERT INTO withdrawal_requests(tg_id,amount_rub,method,details,status,admin_note,created_at,updated_at) VALUES(?,?,?,?,'pending','',?,?)")
+      .run(Number(uid),Math.round(refBal),u2.payout_method,u2.payout_details,now(),now());
+    // Deduct from ref_balance
+    db.prepare("UPDATE users SET ref_balance_rub=0,updated_at=? WHERE tg_id=?").run(now(),Number(uid));
+    await ans(isRu?"✅ Заявка на вывод отправлена.":"✅ Withdrawal request submitted.",true);
+    // Notify admin silently (no push sound) — just update their withdrawal panel
+    tg("sendMessage",{chat_id:ADMIN_ID,text:isRu?`💸 <b>Новая заявка на вывод</b>\n\n${esc(u2.first_name||String(uid))} (<code>${uid}</code>)\nСумма: <b>${rub(refBal)}</b>\nМетод: <b>${esc(u2.payout_method)}</b>\nРеквизиты: <b>${esc(u2.payout_details)}</b>`:`💸 <b>New withdrawal request</b>\n\n${esc(u2.first_name||String(uid))} (<code>${uid}</code>)\nAmount: <b>${rub(refBal)}</b>\nMethod: <b>${esc(u2.payout_method)}</b>\nDetails: <b>${esc(u2.payout_details)}</b>`,parse_mode:"HTML",disable_notification:true,reply_markup:{inline_keyboard:[[{text:"📋 Заявки на вывод",callback_data:"a:withdrawals:0"}]]}}).catch(()=>{});
+    await render(uid,chatId,msgId,"ref");
+    return;
+  }
 
   // ── Gifts ─────────────────────────────────────────────────────────────────
   if(data.startsWith("g:p:")){
@@ -3270,19 +3357,9 @@ async function handleCallback(q) {
   }
   // g:id: handler merged into g:p: flow above
 
-  // ── Crypto topup ──────────────────────────────────────────────────────────
-  if(data==="topup:crypto"){
-    if(!CRYPTOBOT_TOKEN){await ans("CryptoBot не настроен.",true);return;}
-    await ans(); await startCryptoTopup(uid,chatId); return;
-  }
-  if(data.startsWith("fk:start:")){
-    if(!isFkEnabled()){await ans("Способ пополнения временно недоступен.",true);return;}
-    const methodId=Number(data.split(":")[2]||44);
-    if(![44,36,43].includes(methodId)){await ans("Неверный метод оплаты.",true);return;}
-    await ans();
-    await startFkTopup(uid,chatId,methodId);
-    return;
-  }
+  // ── Purchase history ──────────────────────────────────────────────────────
+  if(data.startsWith("ph:")){await render(uid,chatId,msgId,"purchases",{page:Number(data.split(":")[1]||0)});await ans();return;}
+
   if(data.startsWith("cp:check:")){
     const cpId=Number(data.split(":")[2]), cp=getCryptoPayment(cpId);
     if(!cp||cp.tg_id!==uid){await ans("Счёт не найден.",true);return;}
@@ -3301,13 +3378,13 @@ async function handleCallback(q) {
         closePendingOrder(po.id);
         await completePurchaseAfterTopup(uid,po);
       } else {
-        await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.crypto_ok(cp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
+        await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.crypto_ok(cp.amount_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
       }
     }else{
       await tg("sendMessage",{
         chat_id:chatId,
         text:"❌ Оплата пока не найдена. Попробуйте проверить снова через минуту.",
-        reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`cp:check:${cpId}`}],[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}
+        reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`cp:check:${cpId}`}],[{text:T(uid).btn_home,callback_data:"v:home"}]]}
       }).catch(()=>{});
     }
     return;
@@ -3321,7 +3398,7 @@ async function handleCallback(q) {
     const po=getPendingOrderByUser(uid);
     if(po) closePendingOrder(po.id,"cancelled");
     await ans("Отменено.");
-    await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
+    await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
     return;
   }
   if(data.startsWith("fk:check:")){
@@ -3337,7 +3414,7 @@ async function handleCallback(q) {
         await tg("sendMessage",{
           chat_id:chatId,
           text:"❌ Оплата пока не найдена. Попробуйте проверить снова через минуту.",
-          reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`fk:check:${fpId}`}],[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}
+          reply_markup:{inline_keyboard:[[{text:T(uid).btn_check,callback_data:`fk:check:${fpId}`}],[{text:T(uid).btn_home,callback_data:"v:home"}]]}
         }).catch(()=>{});
         return;
       }
@@ -3353,7 +3430,7 @@ async function handleCallback(q) {
         await completePurchaseAfterTopup(uid,po);
       } else {
         const me=user(uid), tx=T(uid);
-        await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.fk_ok(fp.amount_rub),"",tx.success_bal(me.balance_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
+        await tg("editMessageText",{chat_id:chatId,message_id:msgId,text:[tx.fk_ok(fp.amount_rub)].join("\n"),parse_mode:"HTML",reply_markup:{inline_keyboard:[[{text:tx.btn_buy_sub,callback_data:"v:buy"},{text:tx.btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
       }
     }catch(e){
       await tg("answerCallbackQuery",{callback_query_id:q.id,text:`❌ ${String(e.message||"Ошибка проверки")}`.slice(0,200),show_alert:true}).catch(()=>{});
@@ -3374,12 +3451,12 @@ async function handleCallback(q) {
       if(po) closePendingOrder(po.id,"cancelled");
     }
     await ans("Отменено.");
-    await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_topup,callback_data:"v:topup"}]]}}).catch(()=>{});
+    await tg("editMessageReplyMarkup",{chat_id:chatId,message_id:msgId,reply_markup:{inline_keyboard:[[{text:T(uid).btn_home,callback_data:"v:home"}]]}}).catch(()=>{});
     return;
   }
 
   // ── Admin nav ─────────────────────────────────────────────────────────────
-  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_main","a:r":"a_ref","a:db":"a_db","a:imgs":"a_imgs","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk","a:promo":"a_promo"};
+  const adminNav={"a:main":"a_main","a:t":"a_tariffs","a:g":"a_gif","a:b":"a_bcast","a:p":"a_main","a:r":"a_ref","a:db":"a_db","a:links":"a_links","a:guide_edit":"a_guide_edit","a:channel":"a_channel","a:fk":"a_fk","a:promo":"a_promo"};
   if(adminNav[data]){await render(uid,chatId,msgId,adminNav[data]);await ans();return;}
 
   // Cancel admin input — delete the prompt message and return to admin main
@@ -3447,23 +3524,6 @@ async function handleCallback(q) {
     await sendPrompt(chatId,"Отправьте GIF или file_id."         ,"a:cancel_admin");
     await ans(); return;
   }
-  // Section image set
-  if(data.startsWith("a:img:")){
-    const viewKey=data.split(":")[2];
-    const hasImg=!!viewImg(viewKey);
-    setAdminState(uid,"section_img",viewKey);
-    const rows=[];
-    if(hasImg) rows.push([{text:"🗑 Удалить изображение",callback_data:`a:img_del:${viewKey}`}]);
-    rows.push([{text:"« Отмена",callback_data:"a:cancel_admin"}]);
-    await tg("sendMessage",{chat_id:chatId,text:`Изображение для раздела «<b>${viewKey}</b>».\n\nОтправьте фото или file_id.`,parse_mode:"HTML",reply_markup:{inline_keyboard:rows}});
-    await ans(); return;
-  }
-  if(data.startsWith("a:img_del:")){
-    const viewKey=data.split(":")[2];
-    delSetting(`img_${viewKey}`);
-    await ans("✅ Удалено.");
-    await render(uid,chatId,msgId,"a_imgs"); return;
-  }
   // Link edit
   if(data.startsWith("a:lnk:")){
     const key=data.split(":").slice(2).join(":");
@@ -3507,8 +3567,40 @@ async function handleCallback(q) {
   if(data==="a:guide_en"){setAdminState(uid,"guide_text_en","");await sendPrompt(chatId,"🇬🇧 Send the guide text in English.\nLink format: [Label|URL]","a:cancel_admin");await ans();return;}
   if(data==="a:pe"){await ans("Раздел удален.",true);await render(uid,chatId,msgId,"a_main");return;}
   if(data==="a:rp"){setAdminState(uid,"ref_percent","");await sendPrompt(chatId,`Ставка: ${setting("ref_percent","30")}%\n\nВведите новую (0..100):`,"a:cancel_admin");await ans();return;}
+  if(data==="a:rmin"){setAdminState(uid,"ref_min_withdraw","");await sendPrompt(chatId,`Мин. вывод: ${setting("ref_min_withdraw","3000")}₽\n\nВведите новую сумму (₽):`,"a:cancel_admin");await ans();return;}
 
   if(data==="a:find"){setAdminState(uid,"find_user","");await sendPrompt(chatId,"Введите Telegram ID или @username:","a:cancel_admin");await ans();return;}
+
+  // Withdrawal pagination
+  if(data.startsWith("a:withdrawals_p:")){
+    const pg=Number(data.split(":")[2]||0);
+    await render(uid,chatId,msgId,"a_withdrawals",{page:pg}); await ans(); return;
+  }
+  if(data.startsWith("a:withdrawals")){
+    const pg=Number((data.split(":")[2])||0);
+    await render(uid,chatId,msgId,"a_withdrawals",{page:pg}); await ans(); return;
+  }
+  if(data.startsWith("a:wd_done:")){
+    const parts=data.split(":"), wid=Number(parts[2]), pg=Number(parts[3]||0);
+    const wr=db.prepare("SELECT * FROM withdrawal_requests WHERE id=?").get(wid);
+    if(!wr||wr.status!=="pending"){await ans("Уже обработано.",true);return;}
+    db.prepare("UPDATE withdrawal_requests SET status='paid',updated_at=? WHERE id=?").run(now(),wid);
+    const wu=user(wr.tg_id);
+    tg("sendMessage",{chat_id:wr.tg_id,text:`✅ <b>Выплата произведена!</b>\n\nСумма: <b>${rub(wr.amount_rub)}</b>\nМетод: <b>${esc(wr.method)}</b>\nРеквизиты: <b>${esc(wr.details)}</b>`,parse_mode:"HTML"}).catch(()=>{});
+    await ans("✅ Выплачено.");
+    await render(uid,chatId,msgId,"a_withdrawals",{page:pg}); return;
+  }
+  if(data.startsWith("a:wd_reject:")){
+    const parts=data.split(":"), wid=Number(parts[2]), pg=Number(parts[3]||0);
+    const wr=db.prepare("SELECT * FROM withdrawal_requests WHERE id=?").get(wid);
+    if(!wr||wr.status!=="pending"){await ans("Уже обработано.",true);return;}
+    db.prepare("UPDATE withdrawal_requests SET status='rejected',updated_at=? WHERE id=?").run(now(),wid);
+    // Refund to ref_balance
+    db.prepare("UPDATE users SET ref_balance_rub=ref_balance_rub+?,updated_at=? WHERE tg_id=?").run(wr.amount_rub,now(),wr.tg_id);
+    tg("sendMessage",{chat_id:wr.tg_id,text:`❌ <b>Заявка на вывод отклонена.</b>\n\nСумма <b>${rub(wr.amount_rub)}</b> возвращена на реферальный баланс.\n\nСвяжитесь с поддержкой для уточнения деталей.`,parse_mode:"HTML"}).catch(()=>{});
+    await ans("❌ Отклонено, средства возвращены.");
+    await render(uid,chatId,msgId,"a_withdrawals",{page:pg}); return;
+  }
   // DB
   if(data==="a:db_export"){await ans("Формирую файл...");await exportDbToAdmin(chatId);return;}
   if(data==="a:db_import_start"){setAdminState(uid,"db_import_wait","");await ans("Жду файл .db/.sqlite");await tg("sendMessage",{chat_id:chatId,text:"📤 Отправьте SQLite файл документом.\n⚠️ Бот перезапустится после импорта."});return;}
